@@ -7,8 +7,15 @@ const heebo = Heebo({ subsets: ["hebrew", "latin"], display: "swap" });
 
 export const metadata = { title: "התחברות" };
 
-export default function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: PageProps<"/login">) {
+  const sp = await searchParams;
   const configured = hasSupabaseConfig();
+  const oauthError = sp.error === "oauth";
+  const exchangeError = sp.error === "exchange";
+  const reason = typeof sp.reason === "string" ? sp.reason : null;
+
   return (
     <div
       lang="he"
@@ -28,7 +35,56 @@ export default function LoginPage() {
         </div>
 
         {configured ? (
-          <LoginForm />
+          <>
+            {oauthError && (
+              <div
+                role="alert"
+                className="w-full rounded-2xl border border-warn bg-amber-50 p-4 text-sm leading-6 text-right"
+              >
+                <p className="font-bold">ההתחברות עם Google נכשלה לפני השלמתה</p>
+                <p className="mt-1 text-muted">
+                  זהו כשל בשלב Google עצמו — ולא חוסר הרשאה למערכת. הגורמים
+                  הנפוצים:
+                </p>
+                <ul className="mt-2 list-disc space-y-1 pr-5 text-muted">
+                  <li>
+                    Google חסמה את הבקשה (Access blocked) — ב-Google Cloud,
+                    במסך ה-Consent, אם האפליקציה במצב Testing יש להוסיף את
+                    כתובת המייל שלכם כ-Test user.
+                  </li>
+                  <li>
+                    redirect_uri_mismatch — יש לוודא שהכתובת
+                    <span dir="ltr">
+                      {" "}
+                      https://&lt;PROJECT_REF&gt;.supabase.co/auth/v1/callback{" "}
+                    </span>
+                    רשומה ב-Authorized redirect URIs של לקוח ה-OAuth.
+                  </li>
+                </ul>
+                {reason && (
+                  <p
+                    dir="ltr"
+                    className="mt-2 break-all rounded-lg bg-white/70 p-2 text-xs text-muted"
+                  >
+                    {reason}
+                  </p>
+                )}
+              </div>
+            )}
+            {exchangeError && (
+              <div
+                role="alert"
+                className="w-full rounded-2xl border border-warn bg-amber-50 p-4 text-sm leading-6 text-right"
+              >
+                <p className="font-bold">אימות הכניסה נכשל</p>
+                <p className="mt-1 text-muted">
+                  נסו שוב. אם הבעיה חוזרת, נקו את ה-cookies של האתר ונסו
+                  שנית (ייתכן שנותרה התחברות חלקית מניסיון קודם).
+                </p>
+              </div>
+            )}
+            <LoginForm />
+          </>
         ) : (
           <div
             role="alert"

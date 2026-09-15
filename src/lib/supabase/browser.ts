@@ -1,14 +1,21 @@
 import { createBrowserClient as createSBBrowserClient } from "@supabase/ssr";
-import { env } from "@/lib/env";
 
-/** Fallbacks keep `next build` happy without env vars. */
-const FALLBACK_URL = "https://placeholder.supabase.co";
-const FALLBACK_ANON = "public-anon-key-placeholder";
-
-/** Browser client bound to the user's cookies (RLS applies to every query). */
+/**
+ * Browser client bound to the user's cookies (RLS applies to every query).
+ * Direct static references are REQUIRED here: Next.js only inlines
+ * NEXT_PUBLIC_* variables that are accessed statically, and this module runs
+ * in the browser where no runtime process.env exists.
+ */
 export function createBrowserClient() {
-  return createSBBrowserClient(
-    env.NEXT_PUBLIC_SUPABASE_URL || FALLBACK_URL,
-    env.NEXT_PUBLIC_SUPABASE_ANON_KEY || FALLBACK_ANON
-  );
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!url || !anonKey) {
+    throw new Error(
+      "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY. " +
+        "Set them in .env.local and restart the dev server."
+    );
+  }
+
+  return createSBBrowserClient(url, anonKey);
 }

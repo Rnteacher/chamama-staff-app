@@ -15,29 +15,40 @@ import { createServerClient } from "@supabase/ssr";
 
 const PUBLIC_PATHS = new Set(["/login", "/access-denied", "/auth/callback"]);
 
+// Static, direct references — required for correct env resolution.
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
 export async function proxy(request: NextRequest) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    console.error(
+      "proxy: missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY — " +
+        "set them in .env.local (development) or the deployment environment."
+    );
+    return new Response(
+      "Server configuration error: Supabase environment variables are missing.",
+      { status: 500, headers: { "Content-Type": "text/plain; charset=utf-8" } }
+    );
+  }
+
   let response = NextResponse.next({ request });
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL ?? "https://placeholder.supabase.co",
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "public-anon-key-placeholder",
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          );
-          response = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options)
-          );
-        },
+  const supabase = createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
       },
-    }
-  );
+      setAll(cookiesToSet) {
+        cookiesToSet.forEach(({ name, value }) =>
+          request.cookies.set(name, value)
+        );
+        response = NextResponse.next({ request });
+        cookiesToSet.forEach(({ name, value, options }) =>
+          response.cookies.set(name, value, options)
+        );
+      },
+    },
+  });
 
   const {
     data: { user },
@@ -77,6 +88,6 @@ export async function proxy(request: NextRequest) {
 export const config = {
   matcher: [
     // everything except static assets, image optimization, SW and manifest
-    "/((?!_next/static|_next/image|_next/data|icons/|logo.png|sw.js|manifest.webmanifest|favicon.ico).*)",
+    "/((?!_next/static|_next/image|_next/data|icons/|logo.png|icon.png|apple-icon.png|sw.js|manifest.webmanifest|favicon.ico).*)",
   ],
 };

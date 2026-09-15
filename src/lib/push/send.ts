@@ -2,7 +2,7 @@ import "server-only";
 
 import webpush from "web-push";
 import { createAdminClient } from "@/lib/supabase/server";
-import { env, hasVapidConfig } from "@/lib/env";
+import { hasVapidConfig } from "@/lib/server-env";
 
 export interface PushPayload {
   title: string;
@@ -28,10 +28,11 @@ export async function sendPushToUsers(
   }
 
   try {
+    // hasVapidConfig() was checked above — all three values exist.
     webpush.setVapidDetails(
-      env.VAPID_SUBJECT,
-      env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
-      env.VAPID_PRIVATE_KEY
+      process.env.VAPID_SUBJECT!,
+      process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!,
+      process.env.VAPID_PRIVATE_KEY!
     );
   } catch {
     await logPushFailure(null, "vapid_setup_error", payload.url);

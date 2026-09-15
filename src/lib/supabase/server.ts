@@ -3,18 +3,21 @@ import "server-only";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { env } from "@/lib/env";
 
-/** Fallbacks keep `next build` happy without env vars; runtime asserts real values. */
-const FALLBACK_URL = "https://placeholder.supabase.co";
-const FALLBACK_ANON = "public-anon-key-placeholder";
+// Static, direct references only: dynamic env lookups are NOT inlined by
+// Next.js and would silently resolve to undefined.
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-export function supabaseUrl(): string {
-  return env.NEXT_PUBLIC_SUPABASE_URL || FALLBACK_URL;
-}
-
-export function supabaseAnonKey(): string {
-  return env.NEXT_PUBLIC_SUPABASE_ANON_KEY || FALLBACK_ANON;
+function requireSupabaseConfig(): { url: string; anonKey: string } {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    throw new Error(
+      "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY. " +
+        "Set them in .env.local (development) or in the deployment environment " +
+        "(Vercel → Project Settings → Environment Variables), then restart the server."
+    );
+  }
+  return { url: SUPABASE_URL, anonKey: SUPABASE_ANON_KEY };
 }
 
 /**
@@ -22,8 +25,9 @@ export function supabaseAnonKey(): string {
  * Every query goes through RLS as the signed-in staff member.
  */
 export async function createClient(): Promise<SupabaseClient> {
+  const { url, anonKey } = requireSupabaseConfig();
   const cookieStore = await cookies();
-  return createServerClient(supabaseUrl(), supabaseAnonKey(), {
+  return createServerClient(url, anonKey, {
     cookies: {
       getAll() {
         return cookieStore.getAll();
@@ -51,14 +55,15 @@ let adminClient: SupabaseClient | null = null;
  * notification routing) after checking the caller's own authorization.
  */
 export function createAdminClient(): SupabaseClient {
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!key) {
+  const { url } = requireSupabaseConfig();
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceKey) {
     throw new Error(
       "SUPABASE_SERVICE_ROLE_KEY is not set. Admin/notification features are disabled."
     );
   }
   if (!adminClient) {
-    adminClient = createServerClient(supabaseUrl(), key, {
+    adminClient = createServerClient(url, serviceKey, {
       cookies: { getAll: () => [], setAll: () => undefined },
     });
   }

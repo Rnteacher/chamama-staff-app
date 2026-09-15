@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
-import { hasVapidConfig, hasAdminConfig } from "@/lib/env";
+import { hasVapidConfig, hasAdminConfig } from "@/lib/server-env";
 
 export const metadata = { title: "ניהול · סקירה" };
 

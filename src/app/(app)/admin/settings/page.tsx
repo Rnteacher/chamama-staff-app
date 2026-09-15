@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { setIncludeNameInPushAction } from "@/lib/actions/admin";
 import AdminActionForm from "@/components/admin/AdminActionForm";
-import { hasVapidConfig } from "@/lib/env";
+import { hasVapidConfig } from "@/lib/server-env";
 
 export const metadata = { title: "ניהול · הגדרות" };
 
