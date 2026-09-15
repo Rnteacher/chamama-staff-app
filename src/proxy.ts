@@ -1,0 +1,82 @@
+import { NextResponse, type NextRequest } from "next/server";
+import { createServerClient } from "@supabase/ssr";
+
+/**
+ * Network-boundary guard (Next.js 16 "proxy", Node runtime).
+ *
+ * - refreshes the Supabase session cookie on every request
+ * - redirects signed-out users to /login
+ * - verifies the signed-in account is an active, allowlisted staff member
+ *   (unauthorized accounts land on /access-denied and never reach data pages)
+ *
+ * This is defense-in-depth only: every page/action re-checks authorization
+ * and RLS enforces permissions inside the database.
+ */
+
+const PUBLIC_PATHS = new Set(["/login", "/access-denied", "/auth/callback"]);
+
+export async function proxy(request: NextRequest) {
+  let response = NextResponse.next({ request });
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL ?? "https://placeholder.supabase.co",
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "public-anon-key-placeholder",
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value }) =>
+            request.cookies.set(name, value)
+          );
+          response = NextResponse.next({ request });
+          cookiesToSet.forEach(({ name, value, options }) =>
+            response.cookies.set(name, value, options)
+          );
+        },
+      },
+    }
+  );
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const { pathname } = request.nextUrl;
+
+  if (!user) {
+    if (PUBLIC_PATHS.has(pathname)) return response;
+    const loginUrl = new URL("/login", request.url);
+    if (pathname !== "/") loginUrl.searchParams.set("next", pathname);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  // Signed in: only allowlisted, active staff may proceed.
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("id, is_active")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (!profile?.is_active) {
+    if (pathname === "/access-denied") return response;
+    return NextResponse.redirect(new URL("/access-denied", request.url));
+  }
+
+  if (PUBLIC_PATHS.has(pathname)) {
+    // Authorized staff has no business on login/access-denied pages
+    if (pathname !== "/auth/callback") {
+      return NextResponse.redirect(new URL("/", request.url));
+    }
+  }
+
+  return response;
+}
+
+export const config = {
+  matcher: [
+    // everything except static assets, image optimization, SW and manifest
+    "/((?!_next/static|_next/image|_next/data|icons/|logo.png|sw.js|manifest.webmanifest|favicon.ico).*)",
+  ],
+};
