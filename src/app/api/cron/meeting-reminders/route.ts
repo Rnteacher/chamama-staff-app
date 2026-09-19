@@ -2,14 +2,20 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { sendPushToUsers } from "@/lib/push/send";
 import { schoolWeekStart, meetingDeepLink } from "@/lib/meetings";
+import { verifyCronAuth } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Due-meeting reminder dispatcher (Vercel Cron → GET with Bearer CRON_SECRET).
+ * Due-meeting reminder dispatcher.
+ *
+ * Trigger: Supabase Cron (pg_cron + pg_net) every 5 minutes →
+ *   GET /api/cron/meeting-reminders  with  Authorization: Bearer <CRON_SECRET>
+ * (Vercel Hobby does not allow sub-daily Vercel Cron; the endpoint itself is
+ * unchanged — see docs/MEETING-REMINDER-CRON.md)
  *
  * 1. generates missing occurrences for the current + next school week
- *    (Asia/Jerusalem, Sunday-based) — idempotent via unique(schedule, week)
+ *    (Asia/Jerusalem, Sunday-based) - idempotent via unique(schedule, week)
  * 2. ATOMICALLY claims due, un-notified occurrences via
  *    claim_due_meeting_occurrences() (FOR UPDATE SKIP LOCKED + lease):
  *    two concurrent dispatcher runs can never own the same occurrence
@@ -19,16 +25,14 @@ export const dynamic = "force-dynamic";
  *    (crashed workers' claims expire after the 60s lease and are retried)
  */
 export async function GET(request: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
+  const auth = verifyCronAuth(request, process.env.CRON_SECRET);
+  if (!auth.ok) {
     return NextResponse.json(
-      { error: "CRON_SECRET is not configured" },
-      { status: 500 }
+      auth.status === 500
+        ? { error: "CRON_SECRET is not configured" }
+        : { error: "unauthorized" },
+      { status: auth.status }
     );
-  }
-  const auth = request.headers.get("authorization") ?? "";
-  if (auth !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
   const admin = createAdminClient();

@@ -27,7 +27,8 @@ export async function sendPushToUsers(
   if (staffIds.length === 0) return results;
   if (!hasVapidConfig()) {
     await logPushFailure(null, "vapid_not_configured", payload.url);
-    return;
+    for (const id of staffIds) results[id] = false; // not configured → retryable
+    return results;
   }
 
   try {
@@ -39,7 +40,8 @@ export async function sendPushToUsers(
     );
   } catch {
     await logPushFailure(null, "vapid_setup_error", payload.url);
-    return;
+    for (const id of staffIds) results[id] = false; // not configured → retryable
+    return results;
   }
 
   let admin;
