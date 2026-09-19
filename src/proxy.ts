@@ -15,11 +15,21 @@ import { createServerClient } from "@supabase/ssr";
 
 const PUBLIC_PATHS = new Set(["/login", "/access-denied", "/auth/callback"]);
 
+// The reminder dispatcher authenticates itself with its own server-side
+// Bearer secret (verifyCronAuth inside the route) and must NOT be routed
+// through staff-session authentication. Narrowest possible exemption.
+const CRON_PATH = "/api/cron/meeting-reminders";
+
 // Static, direct references — required for correct env resolution.
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 export async function proxy(request: NextRequest) {
+  // cron bypass: before staff-auth/session handling entirely
+  if (request.nextUrl.pathname === CRON_PATH) {
+    return NextResponse.next();
+  }
+
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     console.error(
       "proxy: missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY — " +

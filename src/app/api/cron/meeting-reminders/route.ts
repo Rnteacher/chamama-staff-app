@@ -35,8 +35,16 @@ export async function GET(request: Request) {
     );
   }
 
-  const admin = createAdminClient();
+  let admin;
+  try {
+    admin = createAdminClient();
+  } catch {
+    // e.g. SUPABASE_SERVICE_ROLE_KEY not configured — fail closed
+    console.error("meeting-reminders: dispatcher misconfigured");
+    return NextResponse.json({ error: "dispatcher failed" }, { status: 500 });
+  }
 
+  try {
   // 1) occurrences for this week and next week
   const thisWeek = schoolWeekStart(new Date());
   const nextWeekDate = new Date();
@@ -130,4 +138,9 @@ export async function GET(request: Request) {
     claimed: rows.length,
     reminders_sent: sent,
   });
+  } catch {
+    // never leak internals (and never echo the secret)
+    console.error("meeting-reminders: dispatcher failure");
+    return NextResponse.json({ error: "dispatcher failed" }, { status: 500 });
+  }
 }
