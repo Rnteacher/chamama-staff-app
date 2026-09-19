@@ -148,7 +148,9 @@ export default function IntakeWizard({
           ? "הטופס נסגר בינתיים. פנו לרכז/ת הפרויקטים."
           : res.status === "not_open"
             ? "הטופס נסגר זה עתה. נסו שוב מוקדם יותר בפעם הבאה."
-            : res.message ?? "השליחה נכשלה. נסו שוב."
+            : res.status === "invalid"
+              ? "הקישור אינו תקין. פנו לרכז/ת הפרויקטים."
+              : res.message ?? "השליחה נכשלה. נסו שוב."
       );
       throw new Error(res.status ?? "error");
     }

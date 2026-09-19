@@ -1,10 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { requireMe, hasRole } from "@/lib/auth";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
+import { hashIntakeToken } from "@/lib/intake-token";
+import { jerusalemWallTimeToUtc } from "@/lib/meetings";
 import type { ActionState } from "@/lib/actions/messages";
 
 export type IntakeCreateResult =
@@ -18,10 +20,6 @@ export async function requireCoordinator() {
     me.staffId !== null &&
     (hasRole(me, "project_coordinator") || hasRole(me, "super_admin"));
   return { me, allowed };
-}
-
-function hashToken(token: string): string {
-  return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
 const windowSchema = z
@@ -55,14 +53,25 @@ export async function createIntakeWindowAction(
 
     // cryptographically unguessable public token; only its SHA-256 is stored
     const token = randomBytes(32).toString("base64url");
-    const tokenHash = hashToken(token);
+    const tokenHash = hashIntakeToken(token);
+
+    // datetime-local fields are wall time in the school timezone
+    // (Asia/Jerusalem) — NOT the server timezone (UTC on Vercel)
+    const [oDate, oTime] = parsed.data.opensAt.split("T");
+    const [cDate, cTime] = parsed.data.closesAt.split("T");
+    const [oy, om, od] = oDate.split("-").map(Number);
+    const [oh, omi] = oTime.split(":").map(Number);
+    const [cy, cm, cd] = cDate.split("-").map(Number);
+    const [ch, cmi] = cTime.split(":").map(Number);
+    const opensAtIso = jerusalemWallTimeToUtc(oy, om, od, oh, omi).toISOString();
+    const closesAtIso = jerusalemWallTimeToUtc(cy, cm, cd, ch, cmi).toISOString();
 
     const admin = createAdminClient();
     const { error } = await admin.from("intake_windows").insert({
       title: parsed.data.title,
       token_hash: tokenHash,
-      opens_at: new Date(parsed.data.opensAt).toISOString(),
-      closes_at: new Date(parsed.data.closesAt).toISOString(),
+      opens_at: opensAtIso,
+      closes_at: closesAtIso,
       created_by_staff_id: me.staffId,
     });
     if (error) return { ok: false, error: "יצירת הטופס נכשלה" };

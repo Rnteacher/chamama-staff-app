@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { createClient } from "@/lib/supabase/server";
 import { APP_NAME } from "@/lib/constants";
+import { resolveIntakeState } from "@/lib/intake-token";
 import IntakeWizard from "@/components/intake/IntakeWizard";
 
 export const metadata: Metadata = {
@@ -13,14 +14,10 @@ export default async function IntakePage({
 }: PageProps<"/intake/[token]">) {
   const { token } = await params;
   const supabase = await createClient();
-  const { data } = await supabase.rpc("public_intake_overview", { p_token: token });
-  const overview = (data ?? {}) as {
-    status: "open" | "not_open" | "closed" | "invalid";
-    title?: string;
-    opens_at?: string;
-    closes_at?: string;
-    groups?: { id: string; name: string }[];
-  };
+  const { data } = await supabase.rpc("public_intake_overview", {
+    p_token: token,
+  });
+  const overview = resolveIntakeState(data);
 
   let body: React.ReactNode;
 
@@ -40,12 +37,35 @@ export default async function IntakePage({
       />
     );
   } else if (overview.status === "not_open") {
-    body = <StateCard title="הטופס עדיין לא נפתח" text="חזרו לכאן כשהטופס ייפתח. נתראה בקרוב!" />;
+    body = (
+      <StateCard
+        title="הטופס עדיין לא נפתח"
+        text="חזרו לכאן כשהטופס ייפתח. נתראה בקרוב!"
+      />
+    );
   } else if (overview.status === "closed") {
-    body = <StateCard title="הטופס נסגר" text="תקופת ההצהרות הסתיימה. תודה על ההשתתפות." />;
+    body = (
+      <StateCard
+        title="הטופס נסגר"
+        text="תקופת ההצהרות הסתיימה. תודה על ההשתתפות."
+      />
+    );
+  } else if (overview.status === "error") {
+    // RPC/backend failure — a TECHNICAL error state, never "invalid link"
+    body = (
+      <StateCard
+        title="אירעה שגיאה טכנית"
+        text="לא הצלחנו לטעון את הטופס כרגע. נסו לרענן את העמוד בעוד רגע, ואם הבעיה נמשכת פנו לרכז/ת הפרויקטים."
+      />
+    );
   } else {
     // invalid or revoked token: fail closed, reveal nothing
-    body = <StateCard title="הקישור אינו תקין" text="ייתכן שהקישור שהתקבל אינו נכון או שהוא כבר לא בתוקף. פנו לרכז/ת הפרויקטים לקישור עדכני." />;
+    body = (
+      <StateCard
+        title="הקישור אינו תקין"
+        text="ייתכן שהקישור שהתקבל אינו נכון או שהוא כבר לא בתוקף. פנו לרכז/ת הפרויקטים לקישור עדכני."
+      />
+    );
   }
 
   return (

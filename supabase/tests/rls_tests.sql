@@ -1662,4 +1662,72 @@ begin
 end $$;
 rollback;
 
+-- ============================================================================
+-- INTAKE RPC HARDENING (20260917000001): explicit status model
+-- ============================================================================
+\echo '--- intake RPC hardening tests ---'
+
+-- H1: overview ALWAYS returns exactly one jsonb with a status — even for
+--     garbage, empty, or NULL tokens (never NULL, never an exception)
+begin;
+select set_config('role', 'anon', true);
+do $$ declare v jsonb; begin
+  v := public.public_intake_overview('totally-unknown-token');
+  if v is null or v ->> 'status' <> 'invalid' then
+    raise exception 'FAIL: garbage token overview = %', v;
+  end if;
+  v := public.public_intake_overview('');
+  if v is null or v ->> 'status' <> 'invalid' then
+    raise exception 'FAIL: empty token overview = %', v;
+  end if;
+  raise notice 'PASS: overview always returns a status (invalid for unknown tokens)';
+end $$;
+rollback;
+
+-- H2: anon has EXECUTE on every public intake RPC (and nothing else changed)
+begin;
+select set_config('role', 'anon', true);
+do $$ begin
+  if not has_function_privilege('anon', 'public.public_intake_overview(text)', 'execute') then
+    raise exception 'FAIL: anon cannot execute overview';
+  end if;
+  if not has_function_privilege('anon', 'public.public_intake_majors(text)', 'execute') then
+    raise exception 'FAIL: anon cannot execute majors';
+  end if;
+  if not has_function_privilege('anon', 'public.public_intake_masters(text)', 'execute') then
+    raise exception 'FAIL: anon cannot execute masters';
+  end if;
+  raise notice 'PASS: anon can execute the public intake RPCs';
+end $$;
+rollback;
+
+-- H3: a revoked window reports 'invalid' through the hardened body too
+begin;
+select set_config('role', 'postgres', true);
+insert into public.intake_windows (title, token_hash, opens_at, closes_at, is_revoked, created_by_staff_id)
+values ('טופס מושבת 2', encode(sha256(convert_to('tok-revoked-2','UTF8')),'hex'),
+        now() - interval '1 day', now() + interval '1 day', true, '11111111-1111-1111-1111-111111111101');
+select set_config('role', 'anon', true);
+do $$ declare v jsonb; begin
+  v := public.public_intake_overview('tok-revoked-2');
+  if v ->> 'status' <> 'invalid' then raise exception 'FAIL: revoked window status %', v->>'status'; end if;
+  raise notice 'PASS: revoked token fails closed through hardened RPC';
+end $$;
+rollback;
+
+-- H4: freshly-created valid window resolves 'open' through the hardened body
+begin;
+select set_config('role', 'postgres', true);
+insert into public.intake_windows (title, token_hash, opens_at, closes_at, created_by_staff_id)
+values ('טופס טרי', encode(sha256(convert_to('tok-fresh-1','UTF8')),'hex'),
+        now() - interval '5 minutes', now() + interval '5 minutes', '11111111-1111-1111-1111-111111111101');
+select set_config('role', 'anon', true);
+do $$ declare v jsonb; begin
+  v := public.public_intake_overview('tok-fresh-1');
+  if v ->> 'status' <> 'open' then raise exception 'FAIL: fresh window status %', v->>'status'; end if;
+  if (v -> 'groups') is null then raise exception 'FAIL: groups missing for fresh window'; end if;
+  raise notice 'PASS: freshly-created valid link resolves open immediately';
+end $$;
+rollback;
+
 \echo '--- RLS + identity test suite finished (no FAIL lines above = success) ---'
