@@ -6,14 +6,16 @@
 -- Dev password for every seeded user: Chamama2026!
 -- (only usable in local dev; hosted projects usually disable password login)
 --
--- Re-runnable: it deletes its own previous records first.
+-- Identity model: `profiles` is the application staff directory. Staff exist
+-- BEFORE login (auth_user_id NULL); seeded staff are linked to their seeded
+-- auth.users rows. Re-runnable: deletes its own previous records first.
 -- `supabase db reset` applies migrations then runs this file automatically.
 -- ============================================================================
 
 begin;
 
 -- ---------------------------------------------------------------- wipe ------
-delete from public.allowed_staff_emails where email like '%@chamama.example';
+delete from public.profiles where email like '%@chamama.example'; -- cascades roles/assignments/messages/reads
 delete from public.students
  where id between '44444444-4444-4444-4444-444444444401'
               and '44444444-4444-4444-4444-444444444450';
@@ -23,23 +25,9 @@ delete from public.majors
  where name in ('מגמת תקשורת', 'מגמת ביוטכנולוגיה', 'מגמת מדעי המחשב');
 delete from auth.users where email like '%@chamama.example';
 
--- ---------------------------------------------------- allowlist (first) -----
-insert into public.allowed_staff_emails (id, email, full_name, is_active) values
-  ('10000000-0000-0000-0000-000000000001', 'ronen@chamama.example', 'רונן אדמיניסטרטור', true),
-  ('10000000-0000-0000-0000-000000000002', 'michal@chamama.example', 'מיכל שרון', true),
-  ('10000000-0000-0000-0000-000000000003', 'yoav@chamama.example', 'יואב לוי', true),
-  ('10000000-0000-0000-0000-000000000004', 'naama@chamama.example', 'נעמה פרץ', true),
-  ('10000000-0000-0000-0000-000000000005', 'itay@chamama.example', 'איתי גפן', true),
-  ('10000000-0000-0000-0000-000000000006', 'roni@chamama.example', 'רוני מזרחי', true),
-  ('10000000-0000-0000-0000-000000000007', 'shira@chamama.example', 'שירה אלמוג', true),
-  ('10000000-0000-0000-0000-000000000008', 'amit@chamama.example', 'עמית דהן', true),
-  ('10000000-0000-0000-0000-000000000009', 'liat@chamama.example', 'ליאת נחום', true),
-  ('10000000-0000-0000-0000-00000000000a', 'tom@chamama.example', 'תום בר', true),
-  ('10000000-0000-0000-0000-00000000000b', 'dana@chamama.example', 'דנה אביבי (מושבית)', false); -- allowlisted but deactivated
-
--- -------------------------------------------------------- auth.users --------
--- The on_auth_user_created trigger creates matching profiles (is_active=true
--- because the allowlist entries above are active).
+-- ------------------------------------------------ auth.users (auth only) ----
+-- NOTE: profiles are NOT auto-created; they are inserted explicitly below
+-- with a stable staff UUID and auth_user_id link.
 insert into auth.users
   (instance_id, id, aud, role, email, encrypted_password,
    email_confirmed_at, created_at, updated_at,
@@ -55,10 +43,28 @@ values
   ('00000000-0000-0000-0000-000000000000', '11111111-1111-1111-1111-111111111108', 'authenticated', 'authenticated', 'amit@chamama.example',   crypt('Chamama2026!', gen_salt('bf')), now(), now(), now(), '{"provider":"google","providers":["google"]}', '{"full_name":"עמית דהן"}'),
   ('00000000-0000-0000-0000-000000000000', '11111111-1111-1111-1111-111111111109', 'authenticated', 'authenticated', 'liat@chamama.example',   crypt('Chamama2026!', gen_salt('bf')), now(), now(), now(), '{"provider":"google","providers":["google"]}', '{"full_name":"ליאת נחום"}'),
   ('00000000-0000-0000-0000-000000000000', '11111111-1111-1111-1111-11111111110a', 'authenticated', 'authenticated', 'tom@chamama.example',    crypt('Chamama2026!', gen_salt('bf')), now(), now(), now(), '{"provider":"google","providers":["google"]}', '{"full_name":"תום בר"}'),
-  ('00000000-0000-0000-0000-000000000000', '11111111-1111-1111-1111-11111111110b', 'authenticated', 'authenticated', 'dana@chamama.example',   crypt('Chamama2026!', gen_salt('bf')), now(), now(), now(), '{"provider":"google","providers":["google"]}', '{"full_name":"דנה אביבי"}');
+  ('00000000-0000-0000-0000-000000000000', '99999999-9999-9999-9999-999999999901', 'authenticated', 'authenticated', 'dana@chamama.example',   crypt('Chamama2026!', gen_salt('bf')), now(), now(), now(), '{"provider":"google","providers":["google"]}', '{"full_name":"דנה אביבי"}');
+
+-- ------------------------------------------- staff directory (profiles) -----
+-- Stable staff UUIDs. Seeded staff are linked to their auth rows;
+-- דנה is deactivated (allowlist-style `is_active=false`).
+-- אבי גרוס demonstrates a pre-login staff member (auth_user_id NULL).
+insert into public.profiles (id, email, full_name, is_active, auth_user_id) values
+  ('11111111-1111-1111-1111-111111111101', 'ronen@chamama.example',  'רונן אדמיניסטרטור', true,  '11111111-1111-1111-1111-111111111101'),
+  ('11111111-1111-1111-1111-111111111102', 'michal@chamama.example', 'מיכל שרון',        true,  '11111111-1111-1111-1111-111111111102'),
+  ('11111111-1111-1111-1111-111111111103', 'yoav@chamama.example',   'יואב לוי',         true,  '11111111-1111-1111-1111-111111111103'),
+  ('11111111-1111-1111-1111-111111111104', 'naama@chamama.example',  'נעמה פרץ',         true,  '11111111-1111-1111-1111-111111111104'),
+  ('11111111-1111-1111-1111-111111111105', 'itay@chamama.example',   'איתי גפן',         true,  '11111111-1111-1111-1111-111111111105'),
+  ('11111111-1111-1111-1111-111111111106', 'roni@chamama.example',   'רוני מזרחי',       true,  '11111111-1111-1111-1111-111111111106'),
+  ('11111111-1111-1111-1111-111111111107', 'shira@chamama.example',  'שירה אלמוג',       true,  '11111111-1111-1111-1111-111111111107'),
+  ('11111111-1111-1111-1111-111111111108', 'amit@chamama.example',   'עמית דהן',         true,  '11111111-1111-1111-1111-111111111108'),
+  ('11111111-1111-1111-1111-111111111109', 'liat@chamama.example',   'ליאת נחום',        true,  '11111111-1111-1111-1111-111111111109'),
+  ('11111111-1111-1111-1111-11111111110a', 'tom@chamama.example',    'תום בר',           true,  '11111111-1111-1111-1111-11111111110a'),
+  ('11111111-1111-1111-1111-11111111110b', 'dana@chamama.example',   'דנה אביבי (מושבית)', false, '99999999-9999-9999-9999-999999999901'),
+  ('11111111-1111-1111-1111-11111111110c', 'avi@chamama.example',    'אבי גרוס (טרם התחבר)', true, null);
 
 -- ------------------------------------------------------------ user_roles ----
-insert into public.user_roles (user_id, role) values
+insert into public.user_roles (staff_id, role) values
   ('11111111-1111-1111-1111-111111111101', 'super_admin'),
   ('11111111-1111-1111-1111-111111111102', 'mentor'),
   ('11111111-1111-1111-1111-111111111103', 'mentor'),
@@ -72,7 +78,8 @@ insert into public.user_roles (user_id, role) values
   ('11111111-1111-1111-1111-111111111108', 'project_coordinator'),
   ('11111111-1111-1111-1111-111111111109', 'leadership'), -- הנהלה + ראש מגמה (מבחן קדימות)
   ('11111111-1111-1111-1111-111111111109', 'major_head'),
-  ('11111111-1111-1111-1111-11111111110a', 'staff');
+  ('11111111-1111-1111-1111-11111111110a', 'staff'),
+  ('11111111-1111-1111-1111-11111111110c', 'mentor');     -- תפקיד שהוקצה לפני התחברות ראשונה
 
 -- --------------------------------------------------------------- groups -----
 insert into public.greenhouse_groups (id, name) values
@@ -107,29 +114,30 @@ insert into public.students (id, first_name, last_name, group_id, major_id) valu
   ('44444444-4444-4444-4444-444444444450', 'קורל',  'סעדה',     '22222222-2222-2222-2222-222222222204', null);
 
 -- ---------------------------------------------------- mentor assignments ----
-insert into public.group_mentors (group_id, mentor_id) values
+insert into public.group_mentors (group_id, staff_id) values
   ('22222222-2222-2222-2222-222222222201', '11111111-1111-1111-1111-111111111102'), -- מיכל → זית
   ('22222222-2222-2222-2222-222222222204', '11111111-1111-1111-1111-111111111102'), -- מיכל → דקל
   ('22222222-2222-2222-2222-222222222202', '11111111-1111-1111-1111-111111111103'), -- יואב → שקד
-  ('22222222-2222-2222-2222-222222222203', '11111111-1111-1111-1111-111111111105'); -- איתי → רימון
+  ('22222222-2222-2222-2222-222222222203', '11111111-1111-1111-1111-111111111105'), -- איתי → רימון
+  ('22222222-2222-2222-2222-222222222204', '11111111-1111-1111-1111-11111111110c'); -- אבי (טרם התחבר) → דקל
 
 -- ------------------------------------------------------ major head roles ----
-insert into public.major_heads (major_id, head_id) values
+insert into public.major_heads (major_id, staff_id) values
   ('33333333-3333-3333-3333-333333333301', '11111111-1111-1111-1111-111111111106'), -- רוני → תקשורת
   ('33333333-3333-3333-3333-333333333302', '11111111-1111-1111-1111-111111111109'); -- ליאת → ביוטכנולוגיה
 
 -- --------------------------------------------------- master assignments -----
-insert into public.master_assignments (student_id, master_id) values
+insert into public.master_assignments (student_id, staff_id) values
   ('44444444-4444-4444-4444-444444444401', '11111111-1111-1111-1111-111111111104'), -- נעמה → נועם
   ('44444444-4444-4444-4444-444444444405', '11111111-1111-1111-1111-111111111104'), -- נעמה → ליאו
   ('44444444-4444-4444-4444-444444444409', '11111111-1111-1111-1111-111111111104'), -- נעמה → אופק
   ('44444444-4444-4444-4444-444444444406', '11111111-1111-1111-1111-111111111105'), -- איתי → שחר
-  ('44444444-4444-4444-4444-44444444440b', '11111111-1111-1111-1111-111111111105'); -- איתי → אריאל
+  ('44444444-4444-4444-4444-44444444440b', '11111111-1111-1111-1111-111111111105'), -- איתי → אריאל
+  ('44444444-4444-4444-4444-44444444440d', '11111111-1111-1111-1111-11111111110c'); -- אבי (טרם התחבר) → יונתן
 
 -- ------------------------------------------------------------- messages -----
--- g = is_general_visible, h = is_hidden_from_leads
 insert into public.student_messages
-  (id, student_id, author_id, body, created_at, is_general_visible,
+  (id, student_id, author_staff_id, body, created_at, is_general_visible,
    general_visible_by, general_visible_at, is_hidden_from_leads,
    restriction_changed_by, restriction_changed_at)
 values
@@ -178,16 +186,11 @@ values
    'נגה והצוות שלה סיימו את תכנון הניסוי. ממתינים לאישור חומרים.', now() - interval '20 hours', false, null, null, false, null, null);
 
 -- ---------------------------------------------------------- message_reads ---
--- (per-user read state; missing row = unread)
-insert into public.message_reads (user_id, message_id, read_at) values
-  -- נעמה קראה את שתי ההודעות הראשונות על נועם (המאסטרית שלו)
+insert into public.message_reads (staff_id, message_id, read_at) values
   ('11111111-1111-1111-1111-111111111104', '55555555-5555-5555-5555-555555555501', now() - interval '8 days'),
   ('11111111-1111-1111-1111-111111111104', '55555555-5555-5555-5555-555555555502', now() - interval '6 days'),
-  -- יואב קרא את ההודעה המאושרת על שחר
   ('11111111-1111-1111-1111-111111111103', '55555555-5555-5555-5555-555555555507', now() - interval '3 days'),
-  -- תום (צוות כללי) קרא רק את ההודעה המאושרת על נועם
   ('11111111-1111-1111-1111-11111111110a', '55555555-5555-5555-5555-555555555501', now() - interval '7 days'),
-  -- מיכל קראה את ההודעות שהיא עצמה כתבה
   ('11111111-1111-1111-1111-111111111102', '55555555-5555-5555-5555-555555555501', now() - interval '9 days'),
   ('11111111-1111-1111-1111-111111111102', '55555555-5555-5555-5555-555555555503', now() - interval '2 days');
 
@@ -197,7 +200,7 @@ insert into public.app_settings (key, value) values
 on conflict (key) do nothing;
 
 -- -------------------------------------------------------------- audit -------
-insert into public.audit_logs (actor_id, action, entity_type, entity_id, metadata)
+insert into public.audit_logs (actor_staff_id, action, entity_type, entity_id, metadata)
 values
   (null, 'seed_applied', 'system', null,
    jsonb_build_object('note', 'fictional seed data applied'));

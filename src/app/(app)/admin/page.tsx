@@ -8,14 +8,14 @@ export default async function AdminOverviewPage() {
   const supabase = await createClient();
   const [staffRes, studentsRes, groupsRes, majorsRes] =
     await Promise.all([
-      supabase.from("allowed_staff_emails").select("id", { count: "exact", head: true }),
+      supabase.from("profiles").select("id", { count: "exact", head: true }),
       supabase.from("students").select("id", { count: "exact", head: true }),
       supabase.from("greenhouse_groups").select("id", { count: "exact", head: true }),
       supabase.from("majors").select("id", { count: "exact", head: true }),
     ]);
 
   const stats = [
-    { label: "אנשי סגל ברשימה", value: staffRes.count ?? 0, href: "/admin/staff" },
+    { label: "אנשי סגל בספר", value: staffRes.count ?? 0, href: "/admin/staff" },
     { label: "חניכים", value: studentsRes.count ?? 0, href: "/admin/students" },
     { label: "קבוצות", value: groupsRes.count ?? 0, href: "/admin/groups" },
     { label: "מגמות", value: majorsRes.count ?? 0, href: "/admin/majors" },

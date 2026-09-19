@@ -2,8 +2,16 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { Role } from "@/lib/permissions";
 
+/**
+ * Current staff identity.
+ *
+ * staffId is the STABLE application UUID (profiles.id) — it exists before the
+ * person ever logs in and never changes. It is resolved through the
+ * authenticated Supabase account via profiles.auth_user_id (claimed at first
+ * login by the database-side claim_staff_identity() RPC).
+ */
 export interface Me {
-  userId: string;
+  staffId: string | null;
   email: string;
   fullName: string | null;
   avatarUrl: string | null;
@@ -11,7 +19,7 @@ export interface Me {
   isActive: boolean;
 }
 
-/** Full current-user context. null when signed out. */
+/** Resolve the current authenticated account to its staff identity. */
 export async function getMe(): Promise<Me | null> {
   const supabase = await createClient();
   const {
@@ -19,22 +27,29 @@ export async function getMe(): Promise<Me | null> {
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const [profileRes, rolesRes] = await Promise.all([
-    supabase
-      .from("profiles")
-      .select("email, full_name, avatar_url, is_active")
-      .eq("id", user.id)
-      .maybeSingle(),
-    supabase.from("user_roles").select("role").eq("user_id", user.id),
-  ]);
+  // The staff row linked to this auth account (claimed at first login).
+  const { data: staff } = await supabase
+    .from("profiles")
+    .select("id, email, full_name, avatar_url, is_active")
+    .eq("auth_user_id", user.id)
+    .maybeSingle();
+
+  let roles: Role[] = [];
+  if (staff) {
+    const { data: roleRows } = await supabase
+      .from("user_roles")
+      .select("role")
+      .eq("staff_id", staff.id);
+    roles = (roleRows ?? []).map((r) => r.role as Role);
+  }
 
   return {
-    userId: user.id,
-    email: profileRes?.data?.email ?? user.email ?? "",
-    fullName: profileRes?.data?.full_name ?? null,
-    avatarUrl: profileRes?.data?.avatar_url ?? null,
-    roles: (rolesRes.data ?? []).map((r) => r.role as Role),
-    isActive: profileRes?.data?.is_active ?? false,
+    staffId: staff?.id ?? null,
+    email: staff?.email ?? user.email ?? "",
+    fullName: staff?.full_name ?? null,
+    avatarUrl: staff?.avatar_url ?? null,
+    roles,
+    isActive: Boolean(staff?.is_active),
   };
 }
 

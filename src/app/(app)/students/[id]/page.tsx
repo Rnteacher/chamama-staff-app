@@ -62,7 +62,7 @@ export default async function StudentPage({
       supabase
         .from("student_messages")
         .select(
-          "id, author_id, body, created_at, updated_at, is_general_visible, is_hidden_from_leads, general_visible_by, general_visible_at, restriction_changed_by, restriction_changed_at, profiles!student_messages_author_id_fkey(full_name)"
+          "id, author_staff_id, body, created_at, updated_at, is_general_visible, is_hidden_from_leads, general_visible_by, general_visible_at, restriction_changed_by, restriction_changed_at, profiles!student_messages_author_staff_id_fkey(full_name)"
         )
         .eq("student_id", student.id)
         .order("created_at", { ascending: false })
@@ -70,14 +70,14 @@ export default async function StudentPage({
       supabase
         .from("message_reads")
         .select("message_id")
-        .eq("user_id", me.userId),
+        .eq("staff_id", me.staffId!),
       supabase.rpc("student_unread_counts"),
       student.group_id
         ? supabase
             .from("group_mentors")
             .select("group_id")
             .eq("group_id", student.group_id)
-            .eq("mentor_id", me.userId)
+            .eq("staff_id", me.staffId!)
             .maybeSingle()
         : Promise.resolve({ data: null }),
     ]);
@@ -104,7 +104,7 @@ export default async function StudentPage({
   const messages: FeedMessage[] = (messagesRes.data ?? []).map((m) => {
     const row = m as unknown as {
       id: string;
-      author_id: string;
+      author_staff_id: string;
       body: string;
       created_at: string;
       updated_at: string;
@@ -118,7 +118,7 @@ export default async function StudentPage({
     };
     return {
       id: row.id,
-      authorId: row.author_id,
+      authorId: row.author_staff_id,
       authorName: row.profiles?.full_name ?? "צוות",
       body: row.body,
       createdAt: row.created_at,
@@ -130,7 +130,7 @@ export default async function StudentPage({
       isGeneralVisible: row.is_general_visible,
       isHiddenFromLeads: row.is_hidden_from_leads,
       read: readIds.has(row.id),
-      mine: row.author_id === me.userId,
+      mine: row.author_staff_id === me.staffId,
     };
   });
 

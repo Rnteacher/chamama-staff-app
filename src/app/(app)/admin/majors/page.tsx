@@ -11,10 +11,10 @@ export default async function AdminMajorsPage() {
   const supabase = await createClient();
   const [majorsRes, headsRes, profilesRes] = await Promise.all([
     supabase.from("majors").select("id, name").order("name"),
-    supabase.from("major_heads").select("major_id, head_id"),
+    supabase.from("major_heads").select("major_id, staff_id"),
     supabase
       .from("profiles")
-      .select("id, email, full_name")
+      .select("id, email, full_name, auth_user_id")
       .eq("is_active", true)
       .order("full_name"),
   ]);
@@ -22,7 +22,7 @@ export default async function AdminMajorsPage() {
   const staff = profilesRes.data ?? [];
   const headsByMajor = new Map<string, string[]>();
   for (const h of headsRes.data ?? []) {
-    headsByMajor.set(h.major_id, [...(headsByMajor.get(h.major_id) ?? []), h.head_id]);
+    headsByMajor.set(h.major_id, [...(headsByMajor.get(h.major_id) ?? []), h.staff_id]);
   }
 
   const majors = majorsRes.data ?? [];
@@ -77,14 +77,16 @@ export default async function AdminMajorsPage() {
                         <label key={p.id} className="flex items-center gap-2 text-sm">
                           <input
                             type="checkbox"
-                            name="headIds"
+                            name="staffIds"
                             value={p.id}
                             defaultChecked={headIds.includes(p.id)}
                             className="h-5 w-5 accent-[#46b800]"
                           />
                           <span>
                             {p.full_name ?? p.email}
-                            <span dir="ltr" className="text-xs text-muted"> · {p.email}</span>
+                            {p.auth_user_id === null && (
+                              <span className="text-xs text-warn"> · טרם התחבר/ה</span>
+                            )}
                           </span>
                         </label>
                       ))}

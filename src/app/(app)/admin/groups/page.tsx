@@ -11,10 +11,10 @@ export default async function AdminGroupsPage() {
   const supabase = await createClient();
   const [groupsRes, mentorsRes, profilesRes] = await Promise.all([
     supabase.from("greenhouse_groups").select("id, name").order("name"),
-    supabase.from("group_mentors").select("group_id, mentor_id"),
+    supabase.from("group_mentors").select("group_id, staff_id"),
     supabase
       .from("profiles")
-      .select("id, email, full_name")
+      .select("id, email, full_name, auth_user_id")
       .eq("is_active", true)
       .order("full_name"),
   ]);
@@ -22,7 +22,7 @@ export default async function AdminGroupsPage() {
   const staff = profilesRes.data ?? [];
   const mentorsByGroup = new Map<string, string[]>();
   for (const m of mentorsRes.data ?? []) {
-    mentorsByGroup.set(m.group_id, [...(mentorsByGroup.get(m.group_id) ?? []), m.mentor_id]);
+    mentorsByGroup.set(m.group_id, [...(mentorsByGroup.get(m.group_id) ?? []), m.staff_id]);
   }
 
   const groups = groupsRes.data ?? [];
@@ -77,14 +77,16 @@ export default async function AdminGroupsPage() {
                         <label key={p.id} className="flex items-center gap-2 text-sm">
                           <input
                             type="checkbox"
-                            name="mentorIds"
+                            name="staffIds"
                             value={p.id}
                             defaultChecked={mentorIds.includes(p.id)}
                             className="h-5 w-5 accent-[#46b800]"
                           />
                           <span>
                             {p.full_name ?? p.email}
-                            <span dir="ltr" className="text-xs text-muted"> · {p.email}</span>
+                            {p.auth_user_id === null && (
+                              <span className="text-xs text-warn"> · טרם התחבר/ה</span>
+                            )}
                           </span>
                         </label>
                       ))}

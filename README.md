@@ -162,15 +162,32 @@ After that, the "התחברות עם Google" button on `/login` works end-to-end
 **Remaining dashboard steps are exactly:** Supabase Google provider on/keys, the
 callback URL above, Site URL + redirect URLs (§5), and the env vars in §4/§9.
 
-## 8. Staff allowlist
+## 8. Staff identity (staff directory)
 
-- A Google account gains **nothing** until its normalized email exists in
-  `allowed_staff_emails` with `is_active = true`.
-- Profile activation is synced by a database trigger when the allowlist changes.
-- Manage staff (emails, names, activation, roles) in **`/admin/staff`** (super_admin).
-  CSV import accepts columns `email`, `full_name`.
-- First successful login creates the profile (trigger) with roles as assigned in admin.
-- Deactivating an entry instantly locks the person out (proxy guard + RLS).
+The `profiles` table **is the application staff directory** (the "staff_members"
+identity): every staff member has a **stable UUID that exists before they ever
+log in** (`auth_user_id` is NULL until then). Admins create staff in
+`/admin/staff` (name, email, active, roles — atomically via the
+`admin_create_staff` RPC) and can immediately assign roles, mentor groups,
+masters and major heads **before first login**.
+
+On the first successful Google login, the `claim_staff_identity()` RPC links
+the authenticated `auth.uid()` to the existing staff record by the **verified
+email claim** (never browser input). The staff UUID never changes; roles and
+assignments carry over automatically. Conflicts (a staff record already linked
+to a different Google account), unverified emails and unknown accounts are
+denied and audited. Unknown Google accounts are **never** auto-registered —
+staff identities originate from the admin-created directory only.
+
+- An **active** staff row means the email is allowed to authenticate.
+- Every relationship (roles, group mentors, master assignments, major heads,
+  message authorship `author_staff_id`, read state, push subscriptions, audit
+  actor) references the staff identity — never the OAuth account.
+- RLS resolves the current user through `current_staff_id()` (staff row where
+  `auth_user_id = auth.uid()` and `is_active`).
+
+Deactivating a staff member (`is_active = false`) instantly locks them out.
+Staff CSV import accepts columns `email`, `full_name`.
 
 ## 9. VAPID / Web Push setup
 

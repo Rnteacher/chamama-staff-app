@@ -1,8 +1,8 @@
-import { createClient } from "@/lib/supabase/server";
+﻿import { createClient } from "@/lib/supabase/server";
 import {
-  upsertStaffEmailAction,
+  createStaffAction,
+  updateStaffAction,
   setUserRolesAction,
-  deleteStaffEmailAction,
   importStaffCsvAction,
 } from "@/lib/actions/admin";
 import { ALL_ROLES } from "@/lib/permissions";
@@ -15,77 +15,129 @@ export const metadata = { title: "ניהול · סגל" };
 
 export default async function AdminStaffPage() {
   const supabase = await createClient();
-  const [allowRes, profilesRes, rolesRes] = await Promise.all([
-    supabase.from("allowed_staff_emails").select("*").order("email"),
-    supabase.from("profiles").select("id, email, full_name, is_active"),
-    supabase.from("user_roles").select("user_id, role"),
+  const [staffRes, rolesRes, mentorsRes, mastersRes] = await Promise.all([
+    supabase
+      .from("profiles")
+      .select("id, email, full_name, is_active, auth_user_id, created_at")
+      .order("created_at", { ascending: true }),
+    supabase.from("user_roles").select("staff_id, role"),
+    supabase
+      .from("group_mentors")
+      .select("staff_id, greenhouse_groups(name)"),
+    supabase.from("master_assignments").select("staff_id"),
   ]);
 
-  const profileByEmail = new Map(
-    (profilesRes.data ?? []).map((p) => [p.email.toLowerCase(), p])
-  );
-  const rolesByUser = new Map<string, string[]>();
+  const rolesByStaff = new Map<string, string[]>();
   for (const r of rolesRes.data ?? []) {
-    rolesByUser.set(r.user_id, [...(rolesByUser.get(r.user_id) ?? []), r.role]);
+    rolesByStaff.set(r.staff_id, [
+      ...(rolesByStaff.get(r.staff_id) ?? []),
+      r.role,
+    ]);
   }
 
-  const entries = allowRes.data ?? [];
+  const groupsByStaff = new Map<string, string[]>();
+  for (const m of mentorsRes.data ?? []) {
+    const row = m as unknown as {
+      staff_id: string;
+      greenhouse_groups: { name: string } | null;
+    };
+    const name = row.greenhouse_groups?.name;
+    if (!name) continue;
+    groupsByStaff.set(row.staff_id, [
+      ...(groupsByStaff.get(row.staff_id) ?? []),
+      name,
+    ]);
+  }
+
+  const masterCountByStaff = new Map<string, number>();
+  for (const m of mastersRes.data ?? []) {
+    masterCountByStaff.set(
+      m.staff_id,
+      (masterCountByStaff.get(m.staff_id) ?? 0) + 1
+    );
+  }
+
+  const staff = staffRes.data ?? [];
 
   return (
     <div className="flex flex-col gap-6">
       <section className="rounded-2xl border border-line bg-surface p-4">
         <h2 className="font-extrabold">הוספת איש סגל</h2>
         <p className="mt-1 text-sm text-muted">
-          כתובת ברשימה זו בלבד יכולה להיכנס למערכת (דרך Google).
+          איש הסגל נוצר מיד עם מזהה קבוע — ניתן לשייך אותו לתפקידים, קבוצות
+          וחניכים עוד לפני שהתחבר פעם ראשונה. בכניסה הראשונה חשבון ה-Google
+          מקושר אוטומטית לזהות הקיימת.
         </p>
         <AdminActionForm
-          action={upsertStaffEmailAction}
+          action={createStaffAction}
           submitLabel="הוספה"
-          className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end"
+          className="mt-3 flex flex-col gap-2"
         >
-          <label className="flex-1 text-sm">
-            אימייל
-            <input
-              name="email"
-              type="email"
-              required
-              dir="ltr"
-              className="mt-1 w-full rounded-xl border border-line px-3 py-2"
-            />
-          </label>
-          <label className="flex-1 text-sm">
-            שם מלא
-            <input
-              name="fullName"
-              className="mt-1 w-full rounded-xl border border-line px-3 py-2"
-            />
-          </label>
-          <label className="flex items-center gap-2 pb-2 text-sm">
-            <input type="checkbox" name="isActive" defaultChecked className="h-5 w-5 accent-[#46b800]" />
-            פעיל
-          </label>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <label className="text-sm">
+              אימייל
+              <input
+                name="email"
+                type="email"
+                required
+                dir="ltr"
+                className="mt-1 w-full rounded-xl border border-line px-3 py-2"
+              />
+            </label>
+            <label className="text-sm">
+              שם מלא
+              <input
+                name="fullName"
+                className="mt-1 w-full rounded-xl border border-line px-3 py-2"
+              />
+            </label>
+            <label className="flex items-end gap-2 pb-2 text-sm">
+              <input
+                type="checkbox"
+                name="isActive"
+                defaultChecked
+                className="h-5 w-5 accent-[#46b800]"
+              />
+              פעיל (רשאי להתחבר)
+            </label>
+          </div>
+          <fieldset className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+            {ALL_ROLES.map((role) => (
+              <label key={role} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  name="roles"
+                  value={role}
+                  className="h-5 w-5 accent-[#46b800]"
+                />
+                {ROLE_LABELS[role]}
+              </label>
+            ))}
+          </fieldset>
         </AdminActionForm>
       </section>
 
       <section className="flex flex-col gap-3">
-        <h2 className="font-extrabold">אנשי סגל ({entries.length})</h2>
-        {entries.map((e) => {
-          const profile = profileByEmail.get(String(e.email).toLowerCase());
-          const roles = profile ? rolesByUser.get(profile.id) ?? [] : [];
+        <h2 className="font-extrabold">ספר הצוות ({staff.length})</h2>
+        {staff.map((s) => {
+          const roles = rolesByStaff.get(s.id) ?? [];
+          const linked = Boolean(s.auth_user_id);
+          const groups = groupsByStaff.get(s.id) ?? [];
+          const masterCount = masterCountByStaff.get(s.id) ?? 0;
           return (
             <article
-              key={e.id}
+              key={s.id}
               className="rounded-2xl border border-line bg-surface p-4"
             >
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
-                  <p className="font-bold">{e.full_name ?? "—"}</p>
+                  <p className="font-bold">{s.full_name ?? "—"}</p>
                   <p dir="ltr" className="text-sm text-muted">
-                    {e.email}
+                    {s.email}
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {e.is_active ? (
+                  {s.is_active ? (
                     <span className="rounded-full bg-brand-soft px-2.5 py-1 text-xs font-bold">
                       פעיל
                     </span>
@@ -94,90 +146,86 @@ export default async function AdminStaffPage() {
                       מושבית
                     </span>
                   )}
-                  {!profile && (
+                  {linked ? (
+                    <span className="rounded-full bg-bg px-2.5 py-1 text-xs font-bold text-muted">
+                      מחובר/ת
+                    </span>
+                  ) : (
                     <span className="rounded-full border border-line px-2.5 py-1 text-xs font-bold text-muted">
-                      טרם התחבר
+                      טרם התחבר/ה
                     </span>
                   )}
                 </div>
               </div>
 
-              {profile && (
-                <p className="mt-2 flex flex-wrap gap-1">
-                  {roles.length === 0 ? (
-                    <span className="text-xs text-muted">אין תפקידים</span>
-                  ) : (
-                    roles.map((r) => (
-                      <span
-                        key={r}
-                        className="rounded-full bg-bg px-2 py-0.5 text-xs font-semibold"
-                      >
-                        {ROLE_LABELS[r as Role] ?? r}
-                      </span>
-                    ))
-                  )}
+              <p className="mt-2 flex flex-wrap gap-1">
+                {roles.length === 0 ? (
+                  <span className="text-xs text-muted">אין תפקידים</span>
+                ) : (
+                  roles.map((r) => (
+                    <span
+                      key={r}
+                      className="rounded-full bg-bg px-2 py-0.5 text-xs font-semibold"
+                    >
+                      {ROLE_LABELS[r as Role] ?? r}
+                    </span>
+                  ))
+                )}
+              </p>
+              {(groups.length > 0 || masterCount > 0) && (
+                <p className="mt-1 text-xs text-muted">
+                  {groups.length > 0 && `מנטור/ית בקבוצות: ${groups.join(", ")}`}
+                  {groups.length > 0 && masterCount > 0 && " · "}
+                  {masterCount > 0 && `מאסטר/ית של ${masterCount} חניכים`}
                 </p>
               )}
 
               <div className="mt-3 flex flex-col gap-2">
-                {profile && (
-                  <details>
-                    <summary className="cursor-pointer text-sm font-bold">
-                      תפקידים
-                    </summary>
-                    <AdminActionForm
-                      action={setUserRolesAction}
-                      submitLabel="שמירת תפקידים"
-                      className="mt-2"
-                    >
-                      <input type="hidden" name="userId" value={profile.id} />
-                      <fieldset className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-                        {ALL_ROLES.map((role) => (
-                          <label
-                            key={role}
-                            className="flex items-center gap-2 text-sm"
-                          >
-                            <input
-                              type="checkbox"
-                              name="roles"
-                              value={role}
-                              defaultChecked={roles.includes(role)}
-                              className="h-5 w-5 accent-[#46b800]"
-                            />
-                            {ROLE_LABELS[role]}
-                          </label>
-                        ))}
-                      </fieldset>
-                    </AdminActionForm>
-                  </details>
-                )}
+                <details>
+                  <summary className="cursor-pointer text-sm font-bold">
+                    תפקידים
+                  </summary>
+                  <AdminActionForm
+                    action={setUserRolesAction}
+                    submitLabel="שמירת תפקידים"
+                    className="mt-2"
+                  >
+                    <input type="hidden" name="staffId" value={s.id} />
+                    <fieldset className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+                      {ALL_ROLES.map((role) => (
+                        <label
+                          key={role}
+                          className="flex items-center gap-2 text-sm"
+                        >
+                          <input
+                            type="checkbox"
+                            name="roles"
+                            value={role}
+                            defaultChecked={roles.includes(role)}
+                            className="h-5 w-5 accent-[#46b800]"
+                          />
+                          {ROLE_LABELS[role]}
+                        </label>
+                      ))}
+                    </fieldset>
+                  </AdminActionForm>
+                </details>
 
                 <details>
                   <summary className="cursor-pointer text-sm font-bold">
                     עריכה
                   </summary>
                   <AdminActionForm
-                    action={upsertStaffEmailAction}
+                    action={updateStaffAction}
                     submitLabel="שמירה"
                     className="mt-2 flex flex-col gap-2"
                   >
-                    <input type="hidden" name="id" value={e.id} />
-                    <label className="text-sm">
-                      אימייל
-                      <input
-                        name="email"
-                        type="email"
-                        required
-                        dir="ltr"
-                        defaultValue={String(e.email)}
-                        className="mt-1 w-full rounded-xl border border-line px-3 py-2"
-                      />
-                    </label>
+                    <input type="hidden" name="id" value={s.id} />
                     <label className="text-sm">
                       שם מלא
                       <input
                         name="fullName"
-                        defaultValue={e.full_name ?? ""}
+                        defaultValue={s.full_name ?? ""}
                         className="mt-1 w-full rounded-xl border border-line px-3 py-2"
                       />
                     </label>
@@ -185,22 +233,13 @@ export default async function AdminStaffPage() {
                       <input
                         type="checkbox"
                         name="isActive"
-                        defaultChecked={e.is_active}
+                        defaultChecked={s.is_active}
                         className="h-5 w-5 accent-[#46b800]"
                       />
-                      פעיל
+                      פעיל (רשאי להתחבר)
                     </label>
                   </AdminActionForm>
                 </details>
-
-                <AdminActionForm
-                  action={deleteStaffEmailAction}
-                  submitLabel="הסרה מהרשימה"
-                  danger
-                  className="mt-1"
-                >
-                  <input type="hidden" name="id" value={e.id} />
-                </AdminActionForm>
               </div>
             </article>
           );
@@ -210,7 +249,8 @@ export default async function AdminStaffPage() {
       <section className="rounded-2xl border border-line bg-surface p-4">
         <h2 className="font-extrabold">ייבוא סגל מקובץ CSV</h2>
         <p className="mt-1 text-sm text-muted">
-          עמודות: <code dir="ltr">email</code>, <code dir="ltr">full_name</code> (אופציונלי). שורה ראשונה = כותרות.
+          עמודות: <code dir="ltr">email</code>, <code dir="ltr">full_name</code>{" "}
+          (אופציונלי). שורה ראשונה = כותרות. אנשי סגל קיימים לא מושפעים.
         </p>
         <AdminCsvImport action={importStaffCsvAction} />
       </section>

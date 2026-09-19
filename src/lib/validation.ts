@@ -48,8 +48,7 @@ export const unsubscribePushSchema = z.object({
 
 // ---------------------------------------------------------------- admin ----
 
-export const staffEmailSchema = z.object({
-  id: uuidSchema.optional(),
+export const staffCreateSchema = z.object({
   email: z
     .string()
     .trim()
@@ -57,10 +56,28 @@ export const staffEmailSchema = z.object({
     .pipe(z.email("כתובת אימייל לא תקינה")),
   fullName: z.string().trim().max(120).optional().or(z.literal("")),
   isActive: z.boolean(),
+  roles: z.array(
+    z.enum([
+      "staff",
+      "mentor",
+      "master",
+      "major_head",
+      "counselor",
+      "project_coordinator",
+      "leadership",
+      "super_admin",
+    ])
+  ),
+});
+
+export const staffUpdateSchema = z.object({
+  id: uuidSchema,
+  fullName: z.string().trim().max(120).optional().or(z.literal("")),
+  isActive: z.boolean(),
 });
 
 export const setRolesSchema = z.object({
-  userId: uuidSchema,
+  staffId: uuidSchema,
   roles: z.array(z.enum([
     "staff",
     "mentor",
@@ -94,17 +111,17 @@ export const majorSchema = z.object({
 
 export const assignmentSchema = z.object({
   studentId: uuidSchema,
-  masterIds: z.array(uuidSchema).max(50),
+  staffIds: z.array(uuidSchema).max(50),
 });
 
 export const groupMentorsSchema = z.object({
   groupId: uuidSchema,
-  mentorIds: z.array(uuidSchema).max(50),
+  staffIds: z.array(uuidSchema).max(50),
 });
 
 export const majorHeadsSchema = z.object({
   majorId: uuidSchema,
-  headIds: z.array(uuidSchema).max(50),
+  staffIds: z.array(uuidSchema).max(50),
 });
 
 export const settingSchema = z.object({

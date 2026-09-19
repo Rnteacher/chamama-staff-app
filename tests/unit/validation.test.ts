@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   sendMessageSchema,
   studentSchema,
-  staffEmailSchema,
+  staffCreateSchema,
   subscribePushSchema,
   markMessagesReadSchema,
 } from "@/lib/validation";
@@ -68,16 +68,23 @@ describe("studentSchema", () => {
   });
 });
 
-describe("staffEmailSchema", () => {
+describe("staffCreateSchema", () => {
   it("normalizes email case and rejects invalid emails", () => {
-    const ok = staffEmailSchema.parse({
+    const ok = staffCreateSchema.parse({
       email: "  Ronen@Chamama.Example ",
+      fullName: "",
       isActive: true,
+      roles: [],
     });
     expect(ok.email).toBe("ronen@chamama.example");
-    expect(staffEmailSchema.safeParse({ email: "nope", isActive: true }).success).toBe(
-      false
-    );
+    expect(
+      staffCreateSchema.safeParse({
+        email: "nope",
+        fullName: "",
+        isActive: true,
+        roles: [],
+      }).success
+    ).toBe(false);
   });
 });
 

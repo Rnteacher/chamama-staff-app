@@ -63,14 +63,16 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  // Signed in: only allowlisted, active staff may proceed.
-  const { data: profile } = await supabase
+  // Signed in: only claimed, active staff identities may proceed.
+  // (The claim — linking auth_user_id to the staff record — happens in the
+  // auth callback via the claim_staff_identity() RPC.)
+  const { data: staff } = await supabase
     .from("profiles")
     .select("id, is_active")
-    .eq("id", user.id)
+    .eq("auth_user_id", user.id)
     .maybeSingle();
 
-  if (!profile?.is_active) {
+  if (!staff?.is_active) {
     if (pathname === "/access-denied") return response;
     return NextResponse.redirect(new URL("/access-denied", request.url));
   }

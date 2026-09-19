@@ -18,10 +18,10 @@ function errorMessage(): string {
   return "אירעה שגיאה. נסו שוב.";
 }
 
-/** Is the current user a mentor of this student's group? */
+/** Is the current staff identity a mentor of this student's group? */
 async function amIMentorOf(
   supabase: Awaited<ReturnType<typeof createClient>>,
-  userId: string,
+  staffId: string,
   studentId: string
 ): Promise<boolean> {
   const { data: student } = await supabase
@@ -34,13 +34,14 @@ async function amIMentorOf(
     .from("group_mentors")
     .select("group_id")
     .eq("group_id", student.group_id)
-    .eq("mentor_id", userId)
+    .eq("staff_id", staffId)
     .maybeSingle();
   return Boolean(gm);
 }
 
 /**
  * Any authorized staff member may send a message about ANY student.
+ * The author is the SERVER-resolved staff identity — never a browser value.
  * Visibility flags are honored only when the author mentors the student's
  * group (otherwise silently dropped — and the DB guard would reject them).
  */
@@ -53,12 +54,13 @@ export async function sendMessageAction(
   }
   const { studentId, body } = parsed.data;
   const me = await requireMe();
+  if (!me.staffId) return { ok: false, error: errorMessage() };
   const supabase = await createClient();
 
   let isGeneralVisible = parsed.data.isGeneralVisible;
   let isHiddenFromLeads = parsed.data.isHiddenFromLeads;
   if (isGeneralVisible || isHiddenFromLeads) {
-    const mentor = await amIMentorOf(supabase, me.userId, studentId);
+    const mentor = await amIMentorOf(supabase, me.staffId, studentId);
     if (!mentor) {
       isGeneralVisible = false;
       isHiddenFromLeads = false;
@@ -73,7 +75,7 @@ export async function sendMessageAction(
   const { error } = await supabase.from("student_messages").insert({
     id: messageId,
     student_id: studentId,
-    author_id: me.userId,
+    author_staff_id: me.staffId,
     body,
     is_general_visible: isGeneralVisible,
     is_hidden_from_leads: isHiddenFromLeads,
@@ -105,10 +107,10 @@ async function notifyRecipients(
   const { data: recipientRows } = await admin.rpc("get_message_recipients", {
     p_message_id: messageId,
   });
-  const userIds = (
-    (recipientRows ?? []) as Array<{ user_id: string }>
-  ).map((r) => r.user_id);
-  if (userIds.length === 0) return;
+  const staffIds = (
+    (recipientRows ?? []) as Array<{ staff_id: string }>
+  ).map((r) => r.staff_id);
+  if (staffIds.length === 0) return;
 
   const [{ data: student }, { data: settingRows }] = await Promise.all([
     admin
@@ -128,7 +130,7 @@ async function notifyRecipients(
     ? `התקבל עדכון חדש על ${student.first_name}`
     : "התקבל עדכון חדש על חניך";
 
-  await sendPushToUsers(userIds, {
+  await sendPushToUsers(staffIds, {
     title: "חממה – עדכון חדש",
     body,
     url: `/students/${studentId}?m=${messageId}`,
@@ -145,6 +147,7 @@ export async function moderateMessageAction(
   const { messageId, isGeneralVisible, isHiddenFromLeads } = parsed.data;
 
   const me = await requireMe();
+  if (!me.staffId) return { ok: false, error: errorMessage() };
   const supabase = await createClient();
 
   const { data: msg } = await supabase
@@ -154,7 +157,7 @@ export async function moderateMessageAction(
     .maybeSingle();
   if (!msg) return { ok: false, error: "ההודעה לא נמצאה" };
 
-  const mentor = await amIMentorOf(supabase, me.userId, msg.student_id);
+  const mentor = await amIMentorOf(supabase, me.staffId, msg.student_id);
   if (!mentor) {
     return { ok: false, error: "רק מנטור הקבוצה רשאי לשנות נראות" };
   }
@@ -183,15 +186,16 @@ export async function editMessageAction(
     return { ok: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
   }
   const me = await requireMe();
+  if (!me.staffId) return { ok: false, error: errorMessage() };
   const supabase = await createClient();
 
   const { data: msg } = await supabase
     .from("student_messages")
-    .select("student_id, author_id")
+    .select("student_id, author_staff_id")
     .eq("id", parsed.data.messageId)
     .maybeSingle();
   if (!msg) return { ok: false, error: "ההודעה לא נמצאה" };
-  if (msg.author_id !== me.userId) {
+  if (msg.author_staff_id !== me.staffId) {
     return { ok: false, error: "רק מחבר ההודעה רשאי לערוך אותה" };
   }
 
@@ -206,24 +210,28 @@ export async function editMessageAction(
   return { ok: true };
 }
 
-/** Mark specific messages as read (per-user rows; RLS-bound to self). */
+/** Mark specific messages as read (per-staff rows; RLS-bound to self). */
 export async function markMessagesReadAction(
   input: z.input<typeof markMessagesReadSchema>
 ): Promise<ActionState> {
   const parsed = markMessagesReadSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "קלט לא תקין" };
   const me = await requireMe();
+  if (!me.staffId) return { ok: false, error: errorMessage() };
   const supabase = await createClient();
 
   const rows = parsed.data.messageIds.map((messageId) => ({
-    user_id: me.userId,
+    staff_id: me.staffId,
     message_id: messageId,
   }));
   if (rows.length === 0) return { ok: true };
 
   const { error } = await supabase
     .from("message_reads")
-    .upsert(rows, { onConflict: "user_id,message_id", ignoreDuplicates: true });
+    .upsert(rows, {
+      onConflict: "staff_id,message_id",
+      ignoreDuplicates: true,
+    });
   if (error) return { ok: false, error: errorMessage() };
 
   revalidatePath("/updates");
@@ -238,12 +246,13 @@ export async function markMessagesUnreadAction(
   const parsed = markMessagesReadSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "קלט לא תקין" };
   const me = await requireMe();
+  if (!me.staffId) return { ok: false, error: errorMessage() };
   const supabase = await createClient();
 
   const { error } = await supabase
     .from("message_reads")
     .delete()
-    .eq("user_id", me.userId)
+    .eq("staff_id", me.staffId)
     .in("message_id", parsed.data.messageIds);
   if (error) return { ok: false, error: errorMessage() };
 

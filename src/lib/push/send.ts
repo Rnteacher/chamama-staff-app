@@ -18,10 +18,10 @@ export interface PushPayload {
  * Invalid/expired subscriptions (404/410) are removed.
  */
 export async function sendPushToUsers(
-  userIds: string[],
+  staffIds: string[],
   payload: PushPayload
 ): Promise<void> {
-  if (userIds.length === 0) return;
+  if (staffIds.length === 0) return;
   if (!hasVapidConfig()) {
     await logPushFailure(null, "vapid_not_configured", payload.url);
     return;
@@ -50,7 +50,7 @@ export async function sendPushToUsers(
   const { data: subscriptions, error } = await admin
     .from("push_subscriptions")
     .select("id, endpoint, p256dh, auth")
-    .in("user_id", userIds);
+    .in("staff_id", staffIds);
   if (error || !subscriptions) {
     await logPushFailure(null, "subscriptions_query_error", payload.url);
     return;

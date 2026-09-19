@@ -29,13 +29,27 @@ export async function GET(request: Request) {
   const supabase = await createClient();
 
   const { error } = await supabase.auth.exchangeCodeForSession(code);
-  if (!error) {
-    const target =
-      next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
-    return NextResponse.redirect(`${origin}${target}`);
+  if (error) {
+    // Exchange failed (e.g. stale PKCE verifier) — back to login, NOT
+    // the access-denied page.
+    return NextResponse.redirect(`${origin}/login?error=exchange`);
   }
 
-  // Exchange failed (e.g. stale PKCE verifier after switching ports) —
-  // back to login with a clear message, NOT the access-denied page.
-  return NextResponse.redirect(`${origin}/login?error=exchange`);
+  // Link the authenticated Google account to its staff identity.
+  // Atomic, server/database-side; never trusts browser-provided emails.
+  // Results: 'ok' | 'unauthorized' | 'inactive' | 'conflict' | 'email_unverified'
+  const { data: claimStatus, error: claimError } = await supabase.rpc(
+    "claim_staff_identity"
+  );
+  if (claimError || (claimStatus && claimStatus !== "ok")) {
+    const reason =
+      (typeof claimStatus === "string" && claimStatus) || "error";
+    return NextResponse.redirect(
+      `${origin}/access-denied?reason=${encodeURIComponent(reason)}`
+    );
+  }
+
+  const target =
+    next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
+  return NextResponse.redirect(`${origin}${target}`);
 }

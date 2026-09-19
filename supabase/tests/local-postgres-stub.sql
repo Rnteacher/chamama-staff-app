@@ -61,5 +61,23 @@ begin
   return nullif(sub, '')::uuid;
 end $$;
 
+create or replace function auth.email()
+returns text
+language plpgsql
+stable
+as $$
+declare
+  claims text := current_setting('request.jwt.claims', true);
+begin
+  if claims is not null and claims <> '' then
+    begin
+      return nullif(claims::jsonb ->> 'email', '');
+    exception when others then
+      return null;
+    end;
+  end if;
+  return nullif(current_setting('request.jwt.claim.email', true), '');
+end $$;
+
 grant execute on all functions in schema auth to anon, authenticated, service_role;
 alter default privileges in schema auth grant execute on functions to anon, authenticated, service_role;

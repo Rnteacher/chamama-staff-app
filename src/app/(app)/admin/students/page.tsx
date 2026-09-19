@@ -22,10 +22,10 @@ export default async function AdminStudentsPage() {
       supabase.from("majors").select("id, name").order("name"),
       supabase
         .from("profiles")
-        .select("id, email, full_name")
+        .select("id, email, full_name, auth_user_id")
         .eq("is_active", true)
         .order("full_name"),
-      supabase.from("master_assignments").select("student_id, master_id"),
+      supabase.from("master_assignments").select("student_id, staff_id"),
     ]);
 
   const groups = groupsRes.data ?? [];
@@ -36,7 +36,7 @@ export default async function AdminStudentsPage() {
   for (const m of mastersRes.data ?? []) {
     mastersByStudent.set(m.student_id, [
       ...(mastersByStudent.get(m.student_id) ?? []),
-      m.master_id,
+      m.staff_id,
     ]);
   }
 
@@ -144,6 +144,7 @@ interface StaffOption {
   id: string;
   email: string;
   full_name: string | null;
+  auth_user_id: string | null;
 }
 
 function StudentAdminRow({
@@ -268,14 +269,16 @@ function StudentAdminRow({
                 <label key={p.id} className="flex items-center gap-2 text-sm">
                   <input
                     type="checkbox"
-                    name="masterIds"
+                    name="staffIds"
                     value={p.id}
                     defaultChecked={masterIds.includes(p.id)}
                     className="h-5 w-5 accent-[#46b800]"
                   />
                   <span>
                     {p.full_name ?? p.email}
-                    <span dir="ltr" className="text-xs text-muted"> · {p.email}</span>
+                    {p.auth_user_id === null && (
+                      <span className="text-xs text-warn"> · טרם התחבר/ה</span>
+                    )}
                   </span>
                 </label>
               ))}

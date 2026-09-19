@@ -2,9 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { requireSuperAdmin } from "@/lib/auth";
-import { createAdminClient } from "@/lib/supabase/server";
+import { createAdminClient, createClient } from "@/lib/supabase/server";
 import {
-  staffEmailSchema,
+  staffCreateSchema,
+  staffUpdateSchema,
   setRolesSchema,
   studentSchema,
   groupSchema,
@@ -22,12 +23,13 @@ import { parseCsv } from "@/lib/csv";
 type Admin = Awaited<ReturnType<typeof createAdminClient>>;
 
 async function withAdmin(
-  fn: (admin: Admin, actorId: string) => Promise<ActionState>
+  fn: (admin: Admin, actorStaffId: string) => Promise<ActionState>
 ): Promise<ActionState> {
   try {
     const me = await requireSuperAdmin();
+    if (!me.staffId) return { ok: false, error: "אין זהות צוות מקושרת" };
     const admin = createAdminClient();
-    return await fn(admin, me.userId);
+    return await fn(admin, me.staffId);
   } catch (e) {
     if (e && typeof e === "object" && "digest" in e) throw e; // Next redirects
     return { ok: false, error: humanizeError(e) };
@@ -44,14 +46,14 @@ function humanizeError(e: unknown): string {
 
 async function audit(
   admin: Admin,
-  actorId: string,
+  actorStaffId: string,
   action: string,
   entityType: string,
   entityId: string | null,
   metadata: Record<string, unknown> = {}
 ): Promise<void> {
   await admin.from("audit_logs").insert({
-    actor_id: actorId,
+    actor_staff_id: actorStaffId,
     action,
     entity_type: entityType,
     entity_id: entityId,
@@ -78,45 +80,69 @@ function uuidOrNull(v: string): string | null {
 }
 
 // ------------------------------------------------------------------ staff ---
+// Creating a staff member goes through the admin_create_staff RPC: staff row
+// + initial roles are written atomically, and the caller's super_admin
+// status is verified inside the database function itself.
 
-export async function upsertStaffEmailAction(
+export async function createStaffAction(
   _prev: ActionState | null,
   fd: FormData
 ): Promise<ActionState> {
-  return withAdmin(async (admin, actorId) => {
-    const parsed = staffEmailSchema.safeParse({
-      id: str(fd, "id") || undefined,
+  try {
+    await requireSuperAdmin();
+    const parsed = staffCreateSchema.safeParse({
       email: str(fd, "email"),
+      fullName: str(fd, "fullName"),
+      isActive: bool(fd, "isActive"),
+      roles: strArray(fd, "roles"),
+    });
+    if (!parsed.success) {
+      return { ok: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
+    }
+    const supabase = await createClient();
+    const { error } = await supabase.rpc("admin_create_staff", {
+      p_email: parsed.data.email,
+      p_full_name: parsed.data.fullName || null,
+      p_is_active: parsed.data.isActive,
+      p_roles: parsed.data.roles,
+    });
+    if (error) {
+      if (error.message.includes("duplicate key")) {
+        return { ok: false, error: "כתובת האימייל כבר קיימת בספר הצוות." };
+      }
+      return { ok: false, error: humanizeError(error) };
+    }
+    revalidatePath("/admin/staff");
+    return { ok: true };
+  } catch (e) {
+    if (e && typeof e === "object" && "digest" in e) throw e;
+    return { ok: false, error: humanizeError(e) };
+  }
+}
+
+export async function updateStaffAction(
+  _prev: ActionState | null,
+  fd: FormData
+): Promise<ActionState> {
+  return withAdmin(async (admin, actorStaffId) => {
+    const parsed = staffUpdateSchema.safeParse({
+      id: str(fd, "id"),
       fullName: str(fd, "fullName"),
       isActive: bool(fd, "isActive"),
     });
     if (!parsed.success) {
       return { ok: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
     }
-    const { id, email, fullName, isActive } = parsed.data;
-
-    if (id) {
-      const { error } = await admin
-        .from("allowed_staff_emails")
-        .update({ email, full_name: fullName || null, is_active: isActive })
-        .eq("id", id);
-      if (error) throw error;
-      await audit(admin, actorId, "staff_allowlist_update", "allowed_staff_email", id, {
-        email,
-        is_active: isActive,
-      });
-    } else {
-      const { data, error } = await admin
-        .from("allowed_staff_emails")
-        .insert({ email, full_name: fullName || null, is_active: isActive })
-        .select("id")
-        .single();
-      if (error) throw error;
-      await audit(admin, actorId, "staff_allowlist_add", "allowed_staff_email", data.id, {
-        email,
-        is_active: isActive,
-      });
-    }
+    const { id, fullName, isActive } = parsed.data;
+    const { error } = await admin
+      .from("profiles")
+      .update({ full_name: fullName || null, is_active: isActive })
+      .eq("id", id);
+    if (error) throw error;
+    await audit(admin, actorStaffId, "staff_member_update", "staff_member", id, {
+      full_name: fullName,
+      is_active: isActive,
+    });
     revalidatePath("/admin/staff");
     return { ok: true };
   });
@@ -126,43 +152,25 @@ export async function setUserRolesAction(
   _prev: ActionState | null,
   fd: FormData
 ): Promise<ActionState> {
-  return withAdmin(async (admin, actorId) => {
+  return withAdmin(async (admin, actorStaffId) => {
     const parsed = setRolesSchema.safeParse({
-      userId: str(fd, "userId"),
+      staffId: str(fd, "staffId"),
       roles: strArray(fd, "roles"),
     });
     if (!parsed.success) {
       return { ok: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
     }
-    const { userId, roles } = parsed.data;
-    await admin.from("user_roles").delete().eq("user_id", userId);
+    const { staffId, roles } = parsed.data;
+    await admin.from("user_roles").delete().eq("staff_id", staffId);
     if (roles.length > 0) {
       const { error } = await admin
         .from("user_roles")
-        .insert(roles.map((role) => ({ user_id: userId, role })));
+        .insert(roles.map((role) => ({ staff_id: staffId, role })));
       if (error) throw error;
     }
-    await audit(admin, actorId, "staff_roles_set", "profile", userId, { roles });
-    revalidatePath("/admin/staff");
-    return { ok: true };
-  });
-}
-
-export async function deleteStaffEmailAction(
-  _prev: ActionState | null,
-  fd: FormData
-): Promise<ActionState> {
-  return withAdmin(async (admin, actorId) => {
-    const id = str(fd, "id");
-    if (!isUuid(id)) {
-      return { ok: false, error: "קלט לא תקין" };
-    }
-    const { error } = await admin
-      .from("allowed_staff_emails")
-      .delete()
-      .eq("id", id);
-    if (error) throw error;
-    await audit(admin, actorId, "staff_allowlist_delete", "allowed_staff_email", id);
+    await audit(admin, actorStaffId, "staff_roles_set", "staff_member", staffId, {
+      roles,
+    });
     revalidatePath("/admin/staff");
     return { ok: true };
   });
@@ -172,7 +180,7 @@ export async function importStaffCsvAction(
   _prev: ActionState | null,
   fd: FormData
 ): Promise<ActionState> {
-  return withAdmin(async (admin, actorId) => {
+  return withAdmin(async (admin, actorStaffId) => {
     const text = str(fd, "csv");
     if (!text) return { ok: false, error: "לא נבחר קובץ" };
     const rows = parseCsv(text);
@@ -181,6 +189,14 @@ export async function importStaffCsvAction(
     if (!header.includes("email")) {
       return { ok: false, error: 'השורה הראשונה חייבת לכלול עמודת "email" (ואופציונלי "full_name")' };
     }
+
+    const { data: existing } = await admin
+      .from("profiles")
+      .select("email");
+    const existingEmails = new Set(
+      (existing ?? []).map((p) => String(p.email).toLowerCase())
+    );
+
     let added = 0;
     const errors: string[] = [];
     for (const r of rows.slice(1)) {
@@ -194,20 +210,20 @@ export async function importStaffCsvAction(
         errors.push(obj.email || "(שורה ללא אימייל)");
         continue;
       }
-      const { error } = await admin
-        .from("allowed_staff_emails")
-        .upsert(
-          {
-            email: parsed.data.email,
-            full_name: parsed.data.fullName || null,
-            is_active: true,
-          },
-          { onConflict: "email" }
-        );
+      if (existingEmails.has(parsed.data.email)) continue; // already present
+      const { error } = await admin.from("profiles").insert({
+        email: parsed.data.email,
+        full_name: parsed.data.fullName || null,
+        is_active: true,
+        auth_user_id: null, // staff exists before first login
+      });
       if (error) errors.push(parsed.data.email);
-      else added++;
+      else {
+        added++;
+        existingEmails.add(parsed.data.email);
+      }
     }
-    await audit(admin, actorId, "staff_csv_import", "allowed_staff_email", null, {
+    await audit(admin, actorStaffId, "staff_csv_import", "staff_member", null, {
       added,
       failed: errors.length,
     });
@@ -216,7 +232,7 @@ export async function importStaffCsvAction(
       ok: true,
       error:
         errors.length > 0
-          ? `נוספו ${added} כתובות. נכשלו: ${errors.join(", ")}`
+          ? `נוספו ${added} אנשי סגל. נכשלו: ${errors.join(", ")}`
           : undefined,
     };
   });
@@ -228,7 +244,7 @@ export async function upsertStudentAction(
   _prev: ActionState | null,
   fd: FormData
 ): Promise<ActionState> {
-  return withAdmin(async (admin, actorId) => {
+  return withAdmin(async (admin, actorStaffId) => {
     const parsed = studentSchema.safeParse({
       id: str(fd, "id") || undefined,
       firstName: str(fd, "firstName"),
@@ -251,7 +267,7 @@ export async function upsertStudentAction(
     if (s.id) {
       const { error } = await admin.from("students").update(values).eq("id", s.id);
       if (error) throw error;
-      await audit(admin, actorId, "student_update", "student", s.id, values);
+      await audit(admin, actorStaffId, "student_update", "student", s.id, values);
     } else {
       const { data, error } = await admin
         .from("students")
@@ -259,7 +275,7 @@ export async function upsertStudentAction(
         .select("id")
         .single();
       if (error) throw error;
-      await audit(admin, actorId, "student_create", "student", data.id, values);
+      await audit(admin, actorStaffId, "student_create", "student", data.id, values);
     }
     revalidatePath("/admin/students");
     revalidatePath("/");
@@ -271,7 +287,7 @@ export async function archiveStudentAction(
   _prev: ActionState | null,
   fd: FormData
 ): Promise<ActionState> {
-  return withAdmin(async (admin, actorId) => {
+  return withAdmin(async (admin, actorStaffId) => {
     const id = str(fd, "id");
     const archived = bool(fd, "isArchived");
     if (!isUuid(id)) {
@@ -282,7 +298,7 @@ export async function archiveStudentAction(
       .update({ is_archived: archived })
       .eq("id", id);
     if (error) throw error;
-    await audit(admin, actorId, archived ? "student_archive" : "student_restore", "student", id);
+    await audit(admin, actorStaffId, archived ? "student_archive" : "student_restore", "student", id);
     revalidatePath("/admin/students");
     revalidatePath("/");
     return { ok: true };
@@ -293,22 +309,22 @@ export async function setMastersAction(
   _prev: ActionState | null,
   fd: FormData
 ): Promise<ActionState> {
-  return withAdmin(async (admin, actorId) => {
+  return withAdmin(async (admin, actorStaffId) => {
     const parsed = assignmentSchema.safeParse({
       studentId: str(fd, "studentId"),
-      masterIds: strArray(fd, "masterIds"),
+      staffIds: strArray(fd, "staffIds"),
     });
     if (!parsed.success) return { ok: false, error: "קלט לא תקין" };
-    const { studentId, masterIds } = parsed.data;
+    const { studentId, staffIds } = parsed.data;
     await admin.from("master_assignments").delete().eq("student_id", studentId);
-    if (masterIds.length > 0) {
+    if (staffIds.length > 0) {
       const { error } = await admin
         .from("master_assignments")
-        .insert(masterIds.map((master_id) => ({ student_id: studentId, master_id })));
+        .insert(staffIds.map((staff_id) => ({ student_id: studentId, staff_id })));
       if (error) throw error;
     }
-    await audit(admin, actorId, "master_assignments_set", "student", studentId, {
-      masterIds,
+    await audit(admin, actorStaffId, "master_assignments_set", "student", studentId, {
+      staffIds,
     });
     revalidatePath("/admin/students");
     return { ok: true };
@@ -319,7 +335,7 @@ export async function importStudentsCsvAction(
   _prev: ActionState | null,
   fd: FormData
 ): Promise<ActionState> {
-  return withAdmin(async (admin, actorId) => {
+  return withAdmin(async (admin, actorStaffId) => {
     const text = str(fd, "csv");
     if (!text) return { ok: false, error: "לא נבחר קובץ" };
     const rows = parseCsv(text);
@@ -368,7 +384,7 @@ export async function importStudentsCsvAction(
       if (error) errors.push(`${parsed.data.firstName} ${parsed.data.lastName}`);
       else added++;
     }
-    await audit(admin, actorId, "students_csv_import", "student", null, {
+    await audit(admin, actorStaffId, "students_csv_import", "student", null, {
       added,
       failed: errors.length,
     });
@@ -390,7 +406,7 @@ export async function upsertGroupAction(
   _prev: ActionState | null,
   fd: FormData
 ): Promise<ActionState> {
-  return withAdmin(async (admin, actorId) => {
+  return withAdmin(async (admin, actorStaffId) => {
     const parsed = groupSchema.safeParse({
       id: str(fd, "id") || undefined,
       name: str(fd, "name"),
@@ -404,7 +420,7 @@ export async function upsertGroupAction(
         .update({ name: parsed.data.name })
         .eq("id", parsed.data.id);
       if (error) throw error;
-      await audit(admin, actorId, "group_update", "greenhouse_group", parsed.data.id, {
+      await audit(admin, actorStaffId, "group_update", "greenhouse_group", parsed.data.id, {
         name: parsed.data.name,
       });
     } else {
@@ -414,7 +430,7 @@ export async function upsertGroupAction(
         .select("id")
         .single();
       if (error) throw error;
-      await audit(admin, actorId, "group_create", "greenhouse_group", data.id, {
+      await audit(admin, actorStaffId, "group_create", "greenhouse_group", data.id, {
         name: parsed.data.name,
       });
     }
@@ -428,22 +444,22 @@ export async function setGroupMentorsAction(
   _prev: ActionState | null,
   fd: FormData
 ): Promise<ActionState> {
-  return withAdmin(async (admin, actorId) => {
+  return withAdmin(async (admin, actorStaffId) => {
     const parsed = groupMentorsSchema.safeParse({
       groupId: str(fd, "groupId"),
-      mentorIds: strArray(fd, "mentorIds"),
+      staffIds: strArray(fd, "staffIds"),
     });
     if (!parsed.success) return { ok: false, error: "קלט לא תקין" };
-    const { groupId, mentorIds } = parsed.data;
+    const { groupId, staffIds } = parsed.data;
     await admin.from("group_mentors").delete().eq("group_id", groupId);
-    if (mentorIds.length > 0) {
+    if (staffIds.length > 0) {
       const { error } = await admin
         .from("group_mentors")
-        .insert(mentorIds.map((mentor_id) => ({ group_id: groupId, mentor_id })));
+        .insert(staffIds.map((staff_id) => ({ group_id: groupId, staff_id })));
       if (error) throw error;
     }
-    await audit(admin, actorId, "group_mentors_set", "greenhouse_group", groupId, {
-      mentorIds,
+    await audit(admin, actorStaffId, "group_mentors_set", "greenhouse_group", groupId, {
+      staffIds,
     });
     revalidatePath("/admin/groups");
     revalidatePath("/groups");
@@ -457,7 +473,7 @@ export async function upsertMajorAction(
   _prev: ActionState | null,
   fd: FormData
 ): Promise<ActionState> {
-  return withAdmin(async (admin, actorId) => {
+  return withAdmin(async (admin, actorStaffId) => {
     const parsed = majorSchema.safeParse({
       id: str(fd, "id") || undefined,
       name: str(fd, "name"),
@@ -471,7 +487,7 @@ export async function upsertMajorAction(
         .update({ name: parsed.data.name })
         .eq("id", parsed.data.id);
       if (error) throw error;
-      await audit(admin, actorId, "major_update", "major", parsed.data.id, {
+      await audit(admin, actorStaffId, "major_update", "major", parsed.data.id, {
         name: parsed.data.name,
       });
     } else {
@@ -481,7 +497,7 @@ export async function upsertMajorAction(
         .select("id")
         .single();
       if (error) throw error;
-      await audit(admin, actorId, "major_create", "major", data.id, {
+      await audit(admin, actorStaffId, "major_create", "major", data.id, {
         name: parsed.data.name,
       });
     }
@@ -495,21 +511,21 @@ export async function setMajorHeadsAction(
   _prev: ActionState | null,
   fd: FormData
 ): Promise<ActionState> {
-  return withAdmin(async (admin, actorId) => {
+  return withAdmin(async (admin, actorStaffId) => {
     const parsed = majorHeadsSchema.safeParse({
       majorId: str(fd, "majorId"),
-      headIds: strArray(fd, "headIds"),
+      staffIds: strArray(fd, "staffIds"),
     });
     if (!parsed.success) return { ok: false, error: "קלט לא תקין" };
-    const { majorId, headIds } = parsed.data;
+    const { majorId, staffIds } = parsed.data;
     await admin.from("major_heads").delete().eq("major_id", majorId);
-    if (headIds.length > 0) {
+    if (staffIds.length > 0) {
       const { error } = await admin
         .from("major_heads")
-        .insert(headIds.map((head_id) => ({ major_id: majorId, head_id })));
+        .insert(staffIds.map((staff_id) => ({ major_id: majorId, staff_id })));
       if (error) throw error;
     }
-    await audit(admin, actorId, "major_heads_set", "major", majorId, { headIds });
+    await audit(admin, actorStaffId, "major_heads_set", "major", majorId, { staffIds });
     revalidatePath("/admin/majors");
     revalidatePath("/majors");
     return { ok: true };
@@ -522,7 +538,7 @@ export async function setIncludeNameInPushAction(
   _prev: ActionState | null,
   fd: FormData
 ): Promise<ActionState> {
-  return withAdmin(async (admin, actorId) => {
+  return withAdmin(async (admin, actorStaffId) => {
     const value = bool(fd, "includeName");
     const { error } = await admin
       .from("app_settings")
@@ -531,7 +547,7 @@ export async function setIncludeNameInPushAction(
         { onConflict: "key" }
       );
     if (error) throw error;
-    await audit(admin, actorId, "app_setting_set", "app_setting", null, {
+    await audit(admin, actorStaffId, "app_setting_set", "app_setting", null, {
       key: "include_student_name_in_push",
       value,
     });
