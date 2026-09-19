@@ -164,6 +164,13 @@ callback URL above, Site URL + redirect URLs (§5), and the env vars in §4/§9.
 
 ## 8. Staff identity (staff directory)
 
+> Primary-master semantics: master_assignments.is_primary (partial unique index = one
+> primary per student) marks the coordinator-selected project master; changing it in
+> the intake table replaces the previous primary without touching manually-added
+> secondary masters. Meeting reminders use an atomic claim (
+otify_started_at +
+> FOR UPDATE SKIP LOCKED, 60s lease) so concurrent cron runs never double-send.
+
 The `profiles` table **is the application staff directory** (the "staff_members"
 identity): every staff member has a **stable UUID that exists before they ever
 log in** (`auth_user_id` is NULL until then). Admins create staff in

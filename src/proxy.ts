@@ -57,7 +57,9 @@ export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (!user) {
-    if (PUBLIC_PATHS.has(pathname)) return response;
+    if (PUBLIC_PATHS.has(pathname) || pathname.startsWith("/intake/")) {
+      return response;
+    }
     const loginUrl = new URL("/login", request.url);
     if (pathname !== "/") loginUrl.searchParams.set("next", pathname);
     return NextResponse.redirect(loginUrl);

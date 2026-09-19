@@ -1,3 +1,4 @@
+import { requireSuperAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { setIncludeNameInPushAction } from "@/lib/actions/admin";
 import AdminActionForm from "@/components/admin/AdminActionForm";
@@ -6,6 +7,7 @@ import { hasVapidConfig } from "@/lib/server-env";
 export const metadata = { title: "ניהול · הגדרות" };
 
 export default async function AdminSettingsPage() {
+  await requireSuperAdmin();
   const supabase = await createClient();
   const { data: setting } = await supabase
     .from("app_settings")

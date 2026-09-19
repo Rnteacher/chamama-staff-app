@@ -1,4 +1,5 @@
-﻿import { createClient } from "@/lib/supabase/server";
+import { requireSuperAdmin } from "@/lib/auth";
+import { createClient } from "@/lib/supabase/server";
 import {
   createStaffAction,
   updateStaffAction,
@@ -14,6 +15,7 @@ import type { Role } from "@/lib/permissions";
 export const metadata = { title: "ניהול · סגל" };
 
 export default async function AdminStaffPage() {
+  await requireSuperAdmin();
   const supabase = await createClient();
   const [staffRes, rolesRes, mentorsRes, mastersRes] = await Promise.all([
     supabase

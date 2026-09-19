@@ -1,3 +1,4 @@
+import { requireSuperAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import {
   upsertMajorAction,
@@ -8,6 +9,7 @@ import AdminActionForm from "@/components/admin/AdminActionForm";
 export const metadata = { title: "ניהול · מגמות" };
 
 export default async function AdminMajorsPage() {
+  await requireSuperAdmin();
   const supabase = await createClient();
   const [majorsRes, headsRes, profilesRes] = await Promise.all([
     supabase.from("majors").select("id, name").order("name"),

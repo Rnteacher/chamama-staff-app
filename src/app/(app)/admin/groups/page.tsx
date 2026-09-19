@@ -1,3 +1,4 @@
+import { requireSuperAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import {
   upsertGroupAction,
@@ -8,6 +9,7 @@ import AdminActionForm from "@/components/admin/AdminActionForm";
 export const metadata = { title: "ניהול · קבוצות" };
 
 export default async function AdminGroupsPage() {
+  await requireSuperAdmin();
   const supabase = await createClient();
   const [groupsRes, mentorsRes, profilesRes] = await Promise.all([
     supabase.from("greenhouse_groups").select("id, name").order("name"),

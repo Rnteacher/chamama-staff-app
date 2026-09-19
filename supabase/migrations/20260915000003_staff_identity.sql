@@ -76,14 +76,66 @@ drop function if exists public.unread_messages(int, int);
 drop function if exists public.get_message_recipients(uuid);
 
 -- ---------------------------------------------------------------------------
--- 1. Single source of truth: migrate the allowlist INTO profiles
---    (staff rows that never logged in get a stable UUID; auth_user_id is
---    attached below, after the column exists)
+-- 1. profiles = application staff identity (decouple from auth.users FIRST)
 -- ---------------------------------------------------------------------------
-insert into public.profiles (email, full_name, is_active)
-select a.email, a.full_name, a.is_active
+-- Add the nullable auth link while the legacy invariant is still intact.
+-- Existing profiles were historically keyed by auth.users(id), so their
+-- current id is also their existing auth identity.
+alter table public.profiles
+  add column if not exists auth_user_id uuid;
+
+-- Preserve existing logged-in staff links BEFORE allowing independent staff
+-- UUIDs. The EXISTS guard makes the backfill safe even if legacy data contains
+-- an unexpected row.
+update public.profiles p
+   set auth_user_id = p.id
+ where p.auth_user_id is null
+   and exists (
+     select 1
+       from auth.users u
+      where u.id = p.id
+   );
+
+-- profiles.id is no longer an auth.users foreign key. It is now the stable,
+-- application-owned staff UUID and may exist before first login.
+alter table public.profiles
+  drop constraint if exists profiles_id_fkey;
+
+alter table public.profiles
+  alter column id set default gen_random_uuid();
+
+-- auth_user_id is the ONLY optional link to Supabase Auth.
+alter table public.profiles
+  drop constraint if exists profiles_auth_user_id_fkey;
+
+alter table public.profiles
+  add constraint profiles_auth_user_id_fkey
+  foreign key (auth_user_id)
+  references auth.users (id)
+  on delete set null;
+
+-- One auth account can be linked to at most one application staff identity.
+-- PostgreSQL UNIQUE allows multiple NULL values, which is exactly what we need
+-- for pre-login staff members.
+alter table public.profiles
+  drop constraint if exists profiles_auth_user_id_key;
+
+alter table public.profiles
+  add constraint profiles_auth_user_id_key unique (auth_user_id);
+
+-- ---------------------------------------------------------------------------
+-- 2. Single source of truth: migrate the allowlist INTO profiles
+-- ---------------------------------------------------------------------------
+-- This MUST happen only after profiles.id has been detached from auth.users.
+-- Pre-login staff rows receive an application UUID and leave auth_user_id NULL.
+insert into public.profiles (id, email, full_name, is_active, auth_user_id)
+select gen_random_uuid(), a.email, a.full_name, a.is_active, null
   from public.allowed_staff_emails a
- where not exists (select 1 from public.profiles p where p.email = a.email)
+ where not exists (
+   select 1
+     from public.profiles p
+    where p.email = a.email
+ )
 on conflict (email) do nothing;
 
 update public.profiles p
@@ -94,27 +146,6 @@ update public.profiles p
 
 -- The allowlist is now fully absorbed into the staff directory.
 drop table if exists public.allowed_staff_emails;
-
--- ---------------------------------------------------------------------------
--- 2. profiles = staff identity
--- ---------------------------------------------------------------------------
--- Detach the primary key from auth.users: existing profile UUIDs become the
--- permanent application staff IDs.
-alter table public.profiles drop constraint if exists profiles_id_fkey;
-
--- Nullable link to the authentication identity (set once at first login).
-alter table public.profiles
-  add column if not exists auth_user_id uuid references auth.users (id) on delete set null;
-
--- Backfill: staff who already logged in keep their existing auth identity.
-update public.profiles set auth_user_id = id where auth_user_id is null;
-
--- One auth account can ever be linked to at most one staff identity
--- (multiple NULLs are allowed by a unique constraint).
-alter table public.profiles
-  drop constraint if exists profiles_auth_user_id_key;
-alter table public.profiles
-  add constraint profiles_auth_user_id_key unique (auth_user_id);
 
 -- ---------------------------------------------------------------------------
 -- 3. Rename relationship columns to staff semantics

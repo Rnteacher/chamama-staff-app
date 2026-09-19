@@ -39,3 +39,19 @@ body {
 dialog::backdrop {
   background: rgb(11 15 10 / 0.55);
 }
+
+/* Conversational form slide transitions (RTL: forward enters from the left) */
+@keyframes slide-in-rtl {
+  from { opacity: 0; transform: translateX(-28px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes slide-in-rtl-back {
+  from { opacity: 0; transform: translateX(28px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-\[slide-in-rtl_0\.3s_ease-out\],
+  .animate-\[slide-in-rtl-back_0\.3s_ease-out\] {
+    animation: none;
+  }
+}

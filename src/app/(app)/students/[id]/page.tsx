@@ -6,6 +6,10 @@ import { timeAgo } from "@/lib/format";
 import FeedClient, { type FeedMessage } from "@/components/FeedClient";
 import Composer from "@/components/Composer";
 import MarkAllReadButton from "@/components/MarkStudentReadButton";
+import StudentMeetingsPanel, {
+  type ScheduleRow,
+  type ReportableOccurrence,
+} from "@/components/meetings/StudentMeetingsPanel";
 import EmptyState from "@/components/EmptyState";
 
 const PAGE_SIZE = 30;
@@ -47,7 +51,7 @@ export default async function StudentPage({
 
   if (!student) notFound();
 
-  const [mentorsRes, mastersRes, messagesRes, readsRes, countsRes, myMentorRes] =
+  const [mentorsRes, mastersRes, messagesRes, readsRes, countsRes, myMentorRes, myMasterRes, schedulesRes, reportableRes] =
     await Promise.all([
       student.group_id
         ? supabase
@@ -80,6 +84,18 @@ export default async function StudentPage({
             .eq("staff_id", me.staffId!)
             .maybeSingle()
         : Promise.resolve({ data: null }),
+      supabase
+        .from("master_assignments")
+        .select("student_id")
+        .eq("student_id", student.id)
+        .eq("staff_id", me.staffId!)
+        .maybeSingle(),
+      supabase
+        .from("meeting_schedules")
+        .select("id, staff_id, context, weekday, meeting_time, is_active, profiles(full_name)")
+        .eq("student_id", student.id)
+        .order("weekday"),
+      supabase.rpc("my_reportable_occurrences", { p_student_id: student.id }),
     ]);
 
   const readIds = new Set<string>((readsRes.data ?? []).map((r) => r.message_id));
@@ -94,12 +110,55 @@ export default async function StudentPage({
   const privileged = isPrivileged(me);
 
   const mentorNames = (mentorsRes.data ?? [])
-    .map((m) => (m as unknown as { profiles: { full_name: string | null } | null }).profiles?.full_name)
+    .map((m) => (m as unknown as { profiles: { id: string; full_name: string | null } | null }).profiles?.full_name)
     .filter((n): n is string => Boolean(n));
 
   const masterNames = (mastersRes.data ?? [])
-    .map((m) => (m as unknown as { profiles: { full_name: string | null } | null }).profiles?.full_name)
+    .map((m) => (m as unknown as { profiles: { id: string; full_name: string | null } | null }).profiles?.full_name)
     .filter((n): n is string => Boolean(n));
+
+  // meetings: who may schedule, what exists, what is reportable
+  const isSuper = me.roles.includes("super_admin");
+  const allowedContexts: ("mentor" | "master")[] = [
+    ...(myMentorRes.data || isSuper ? (["mentor"] as const) : []),
+    ...(myMasterRes.data || isSuper ? (["master"] as const) : []),
+  ];
+
+  const schedules: ScheduleRow[] = (schedulesRes.data ?? []).map((s) => {
+    const row = s as unknown as {
+      id: string;
+      staff_id: string;
+      context: "mentor" | "master";
+      weekday: number;
+      meeting_time: string;
+      is_active: boolean;
+      profiles: { full_name: string | null } | null;
+    };
+    return {
+      id: row.id,
+      context: row.context,
+      weekday: row.weekday,
+      meetingTime: row.meeting_time.slice(0, 5),
+      isActive: row.is_active,
+      staffName: row.profiles?.full_name ?? "צוות",
+      mine: row.staff_id === me.staffId,
+    };
+  });
+
+  const reportable: ReportableOccurrence[] = (
+    (reportableRes.data ?? []) as Array<{
+      occurrence_id: string;
+      due_at: string;
+      context: "mentor" | "master";
+    }>
+  ).map((row) => ({
+    occurrenceId: row.occurrence_id,
+    dueAt: row.due_at,
+    context: row.context,
+  }));
+
+  const meetingParam = typeof sp.meeting === "string" ? sp.meeting : undefined;
+  const autoOpenReport = sp.report === "1";
 
   const messages: FeedMessage[] = (messagesRes.data ?? []).map((m) => {
     const row = m as unknown as {
@@ -202,6 +261,15 @@ export default async function StudentPage({
           </div>
         )}
       </header>
+
+      <StudentMeetingsPanel
+        studentId={student.id}
+        schedules={schedules}
+        allowedContexts={allowedContexts}
+        reportable={reportable}
+        initialOccurrenceId={meetingParam}
+        autoOpenReport={autoOpenReport}
+      />
 
       {messages.length === 0 && page === 0 ? (
         <EmptyState

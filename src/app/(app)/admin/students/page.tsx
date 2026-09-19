@@ -1,3 +1,4 @@
+import { requireSuperAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import {
   upsertStudentAction,
@@ -11,6 +12,7 @@ import AdminCsvImport from "@/components/admin/AdminCsvImport";
 export const metadata = { title: "ניהול · חניכים" };
 
 export default async function AdminStudentsPage() {
+  await requireSuperAdmin();
   const supabase = await createClient();
   const [studentsRes, groupsRes, majorsRes, profilesRes, mastersRes] =
     await Promise.all([

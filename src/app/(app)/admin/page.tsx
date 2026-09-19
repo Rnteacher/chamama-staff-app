@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/server";
+import { requireMe } from "@/lib/auth";import { createClient } from "@/lib/supabase/server";
 import { hasVapidConfig, hasAdminConfig } from "@/lib/server-env";
 
 export const metadata = { title: "ניהול · סקירה" };
 
 export default async function AdminOverviewPage() {
+  await requireMe(); // overview is open to coordinators too
   const supabase = await createClient();
   const [staffRes, studentsRes, groupsRes, majorsRes] =
     await Promise.all([

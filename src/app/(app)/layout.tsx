@@ -22,7 +22,8 @@ export default async function AppLayout({
     (unreadRows ?? []) as Array<{ student_id: string; unread_count: number }>
   ).reduce((sum, r) => sum + Number(r.unread_count), 0);
 
-  const isAdmin = me.roles.includes("super_admin");
+  const isAdmin =
+    me.roles.includes("super_admin") || me.roles.includes("project_coordinator");
 
   return (
     <div className="flex min-h-dvh flex-col">
