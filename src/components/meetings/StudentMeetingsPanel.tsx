@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import ConversationalForm, { type Question, type Answers } from "@/components/conversational/ConversationalForm";
-import { upsertMeetingScheduleAction, submitMeetingReportAction, submitAdhocMeetingReportAction } from "@/lib/actions/meetings";
+import { upsertMeetingScheduleAction, submitMeetingReportAction, submitAdhocMeetingReportAction, deactivateMeetingScheduleAction } from "@/lib/actions/meetings";
 import { WEEKDAY_SHORT_LABELS, WEEKDAY_LABELS, schoolWeekStart, isValidTime, jerusalemWallTimeToUtc, jerusalemParts } from "@/lib/meetings";
 
 export interface ScheduleRow {
@@ -29,6 +29,7 @@ interface StudentMeetingsPanelProps {
   reportable: ReportableOccurrence[];
   initialOccurrenceId?: string;
   autoOpenReport: boolean;
+  isSuper?: boolean;
 }
 
 const CONTEXT_LABELS: Record<"mentor" | "master", string> = {
@@ -43,10 +44,13 @@ export default function StudentMeetingsPanel({
   reportable,
   initialOccurrenceId,
   autoOpenReport,
+  isSuper = false,
 }: StudentMeetingsPanelProps) {
   const router = useRouter();
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
   const [editing, setEditing] = useState<ScheduleRow | null>(null);
+  const [deletingScheduleId, setDeletingScheduleId] = useState<string | null>(null);
+  const [deletingSchedule, startDeleteSchedule] = useTransition();
   const [reportOpen, setReportOpen] = useState(
     Boolean(autoOpenReport && initialOccurrenceId)
   );
@@ -95,31 +99,75 @@ export default function StudentMeetingsPanel({
         <p className="mt-2 text-sm text-muted">טרם נקבעה פגישה שבועית לחניך/ה זה.</p>
       ) : (
         <ul className="mt-3 flex flex-col gap-2">
-          {activeSchedules.map((s) => (
-            <li
-              key={s.id}
-              className="flex items-center justify-between gap-3 rounded-xl border border-line bg-bg px-3 py-2.5 text-sm"
-            >
-              <span>
-                <span className="font-bold">
-                  {WEEKDAY_SHORT_LABELS[s.weekday]} · {s.meetingTime}
+          {activeSchedules.map((s) => {
+            const canDelete = s.mine || isSuper;
+            const confirming = deletingScheduleId === s.id;
+            return (
+              <li
+                key={s.id}
+                className="flex items-center justify-between gap-3 rounded-xl border border-line bg-bg px-3 py-2.5 text-sm"
+              >
+                <span>
+                  <span className="font-bold">
+                    {WEEKDAY_SHORT_LABELS[s.weekday]} · {s.meetingTime}
+                  </span>
+                  <span className="text-muted"> · {CONTEXT_LABELS[s.context]}: {s.staffName}</span>
                 </span>
-                <span className="text-muted"> · {CONTEXT_LABELS[s.context]}: {s.staffName}</span>
-              </span>
-              {s.mine && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditing(s);
-                    setScheduleDialogOpen(true);
-                  }}
-                  className="rounded-full border border-line bg-surface px-3 py-1 text-xs font-bold"
-                >
-                  עריכה
-                </button>
-              )}
-            </li>
-          ))}
+                <span className="flex shrink-0 items-center gap-1.5">
+                  {s.mine && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditing(s);
+                        setScheduleDialogOpen(true);
+                      }}
+                      className="rounded-full border border-line bg-surface px-3 py-1 text-xs font-bold"
+                    >
+                      עריכה
+                    </button>
+                  )}
+                  {canDelete && (
+                    <button
+                      type="button"
+                      onClick={() => setDeletingScheduleId(s.id)}
+                      disabled={deletingSchedule}
+                      className="rounded-full border border-line bg-surface px-3 py-1 text-xs font-bold text-danger disabled:opacity-60"
+                    >
+                      מחיקה
+                    </button>
+                  )}
+                </span>
+                {confirming && (
+                  <div className="flex w-full items-center gap-2 rounded-lg bg-red-50 p-2 text-xs" role="alertdialog" aria-label="אישור מחיקת פגישה שבועית">
+                    <span className="font-bold text-danger">
+                      למחוק את הפגישה השבועית ({WEEKDAY_SHORT_LABELS[s.weekday]} · {s.meetingTime})? דיווחים קודמים יישמרו.
+                    </span>
+                    <span className="mr-auto flex gap-1.5">
+                      <button
+                        type="button"
+                        disabled={deletingSchedule}
+                        onClick={() => startDeleteSchedule(async () => {
+                          const res = await deactivateMeetingScheduleAction(s.id);
+                          setDeletingScheduleId(null);
+                          if (res.ok) router.refresh();
+                        })}
+                        className="rounded-full bg-danger px-3 py-1 font-bold text-white disabled:opacity-60"
+                      >
+                        {deletingSchedule ? "מוחקים…" : "אישור מחיקה"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeletingScheduleId(null)}
+                        className="rounded-full border border-line bg-surface px-3 py-1 font-bold"
+                      >
+                        ביטול
+                      </button>
+                    </span>
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
 

@@ -138,15 +138,49 @@ export default async function HomePage() {
         <p className="mt-1 text-sm text-muted">{roleChips}</p>
       </section>
 
+      {/* mobile-only global search entry — on desktop the student table has
+          its own search/filter toolbar (exactly one student search) */}
       <Link
         href="/search"
-        className="flex min-h-[52px] items-center gap-3 rounded-2xl border border-line bg-surface px-4 py-3 text-muted hover:bg-brand-soft/40"
+        className="flex min-h-[52px] items-center gap-3 rounded-2xl border border-line bg-surface px-4 py-3 text-muted hover:bg-brand-soft/40 lg:hidden"
       >
         <SearchGlyph />
         <span>חיפוש חניך…</span>
       </Link>
 
-      {/* desktop dashboards with sorting/filtering/search */}
+      {/* עדכונים — renders ABOVE the student table on desktop */}
+      <section aria-labelledby="unread-heading">
+        <div className="mb-2 flex items-center justify-between">
+          <h2 id="unread-heading" className="font-extrabold">
+            עדכונים שלא נקראו
+            {totalUnread > 0 && (
+              <span className="mr-2 rounded-full bg-brand px-2 py-0.5 text-xs font-extrabold text-ink">{totalUnread}</span>
+            )}
+          </h2>
+          <Link href="/updates" className="text-sm font-medium text-muted hover:text-ink">הכל ›</Link>
+        </div>
+        {unreadRows.length === 0 ? (
+          <EmptyState title="הכל נקרא" description="אין עדכונים חדשים. כשיתקבל עדכון רלוונטי הוא יופיע כאן." />
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {unreadRows.map((row) => (
+              <li key={row.message_id}>
+                <Link href={`/students/${row.student_id}?m=${row.message_id}`}
+                  className="flex items-start gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40">
+                  <span aria-hidden="true" className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-dark" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-bold">{row.student_first_name} {row.student_last_name}</span>
+                    <span className="block truncate text-sm text-muted">{row.body}</span>
+                    <span className="mt-0.5 block text-xs text-muted">{row.author_name ?? "צוות"} · {timeAgo(row.created_at)}</span>
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* desktop dashboards with sorting/filtering/search — below עדכונים */}
       {!useViewAsDash && broadRows.length > 0 ? (
         <div className="hidden flex-col gap-6 lg:flex">
           <StudentDataTable title="כל החניכים" rows={broadRows}
@@ -186,37 +220,6 @@ export default async function HomePage() {
           )}
         </div>
       ) : null}
-
-      <section aria-labelledby="unread-heading">
-        <div className="mb-2 flex items-center justify-between">
-          <h2 id="unread-heading" className="font-extrabold">
-            עדכונים שלא נקראו
-            {totalUnread > 0 && (
-              <span className="mr-2 rounded-full bg-brand px-2 py-0.5 text-xs font-extrabold text-ink">{totalUnread}</span>
-            )}
-          </h2>
-          <Link href="/updates" className="text-sm font-medium text-muted hover:text-ink">הכל ›</Link>
-        </div>
-        {unreadRows.length === 0 ? (
-          <EmptyState title="הכל נקרא" description="אין עדכונים חדשים. כשיתקבל עדכון רלוונטי הוא יופיע כאן." />
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {unreadRows.map((row) => (
-              <li key={row.message_id}>
-                <Link href={`/students/${row.student_id}?m=${row.message_id}`}
-                  className="flex items-start gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40">
-                  <span aria-hidden="true" className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-dark" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block font-bold">{row.student_first_name} {row.student_last_name}</span>
-                    <span className="block truncate text-sm text-muted">{row.body}</span>
-                    <span className="mt-0.5 block text-xs text-muted">{row.author_name ?? "צוות"} · {timeAgo(row.created_at)}</span>
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
 
       <section aria-labelledby="my-students-heading" className="lg:hidden">
         <h2 id="my-students-heading" className="mb-2 font-extrabold">החניכים שלי</h2>

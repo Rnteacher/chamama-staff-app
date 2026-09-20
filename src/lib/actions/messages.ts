@@ -11,6 +11,7 @@ import {
   markMessagesReadSchema,
 } from "@/lib/validation";
 import { sendPushToUsers } from "@/lib/push/send";
+import { assertNotViewAs } from "@/lib/view-as";
 
 export type ActionState = { ok: true } | { ok: false; error: string };
 
@@ -187,6 +188,9 @@ export async function editMessageAction(
   }
   const me = await requireMe();
   if (!me.staffId) return { ok: false, error: errorMessage() };
+  if (!(await assertNotViewAs())) {
+    return { ok: false, error: "לא זמין במצב צפייה" };
+  }
   const supabase = await createClient();
 
   const { data: msg } = await supabase
@@ -207,6 +211,7 @@ export async function editMessageAction(
 
   revalidatePath(`/students/${msg.student_id}`);
   revalidatePath("/updates");
+  revalidatePath("/");
   return { ok: true };
 }
 
@@ -279,4 +284,37 @@ export async function markStudentAllReadAction(
   if (ids.length === 0) return { ok: true };
 
   return markMessagesReadAction({ messageIds: ids });
+}
+
+/** Soft-delete a student message (author or super_admin via DB RPC). */
+export async function deleteMessageAction(
+  messageId: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireMe();
+  if (!(await assertNotViewAs())) {
+    return { ok: false, error: "לא זמין במצב צפייה" };
+  }
+  if (!/^[0-9a-f-]{36}$/i.test(messageId)) {
+    return { ok: false, error: "קלט לא תקין" };
+  }
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("delete_student_message", {
+    p_message_id: messageId,
+  });
+  if (error) {
+    if (error.message.includes("not yours"))
+      return { ok: false, error: "רק מחבר ההודעה רשאי למחוק אותה" };
+    return { ok: false, error: "המחיקה נכשלה" };
+  }
+  // refresh every surface that lists student messages
+  const admin = createAdminClient();
+  const { data: msg } = await admin
+    .from("student_messages")
+    .select("student_id")
+    .eq("id", messageId)
+    .maybeSingle();
+  revalidatePath("/");
+  revalidatePath("/updates");
+  if (msg?.student_id) revalidatePath(`/students/${msg.student_id}`);
+  return { ok: true };
 }

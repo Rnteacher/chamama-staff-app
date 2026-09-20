@@ -81,6 +81,7 @@ export async function deactivateMeetingScheduleAction(
     p_schedule_id: scheduleId,
   });
   if (error) return { ok: false, error: "המחיקה נכשלה" };
+  revalidatePath("/");
   return { ok: true };
 }
 

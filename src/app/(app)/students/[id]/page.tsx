@@ -11,6 +11,7 @@ import UnifiedUpdatesFeed, { type FeedItem } from "@/components/feed/UnifiedUpda
 import Composer from "@/components/Composer";
 import MarkAllReadButton from "@/components/MarkStudentReadButton";
 import EmptyState from "@/components/EmptyState";
+import { getViewAsState } from "@/lib/view-as";
 
 export const metadata = { title: "חניך" };
 
@@ -19,6 +20,7 @@ export default async function StudentPage({
   searchParams,
 }: PageProps<"/students/[id]">) {
   const me = await requireMe();
+  const viewAs = await getViewAsState();
   const { id } = await params;
   const sp = await searchParams;
   const focusMessageId = typeof sp.m === "string" ? sp.m : undefined;
@@ -118,6 +120,7 @@ export default async function StudentPage({
     intervention_categories: string[] | null; intervention_functional: string | null;
     intervention_emotional: string | null; intervention_other: string | null;
     next_steps: string | null; meeting_at: string | null; source_id: string | null;
+    author_staff_id: string | null;
   }>).map((r) => ({
     item_id: r.item_id, kind: r.kind as FeedItem["kind"], category: r.category as FeedItem["category"],
     at: r.at, actor_name: r.actor_name, title: r.title, body: r.body,
@@ -126,6 +129,7 @@ export default async function StudentPage({
     intervention_functional: r.intervention_functional, intervention_emotional: r.intervention_emotional,
     intervention_other: r.intervention_other, next_steps: r.next_steps,
     meeting_at: r.meeting_at, source_id: r.source_id,
+    author_staff_id: r.author_staff_id ?? null,
   }));
 
   return (
@@ -168,6 +172,7 @@ export default async function StudentPage({
         reportable={reportable}
         initialOccurrenceId={meetingParam}
         autoOpenReport={autoOpenReport}
+        isSuper={isSuper}
       />
 
       {/* unified updates feed: messages + meeting reports + form submissions */}
@@ -182,6 +187,9 @@ export default async function StudentPage({
           focusMessageId={focusMessageId}
           studentId={student.id}
           canEditReports={isSuper}
+          currentStaffId={me.staffId}
+          isSuperAdmin={isSuper}
+          readOnly={viewAs.active}
         />
       )}
 

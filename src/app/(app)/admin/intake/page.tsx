@@ -20,7 +20,7 @@ export default async function AdminIntakePage() {
     await Promise.all([
       supabase
         .from("intake_windows")
-        .select("id, title, opens_at, closes_at, is_revoked, created_at, profiles(full_name), encrypted_token IS NOT NULL as has_recoverable_link")
+        .select("id, title, opens_at, closes_at, is_revoked, created_at, profiles(full_name), encrypted_token")
         .order("created_at", { ascending: false }),
       supabase
         .from("intake_submissions")
@@ -37,6 +37,16 @@ export default async function AdminIntakePage() {
       supabase.from("majors").select("id, name").order("name"),
     ]);
 
+  // never swallow a query error — a broken select/filter must surface loudly
+  // (a silent empty list looks exactly like "all intake windows disappeared")
+  if (windowsRes.error) {
+    console.error("[admin/intake] intake_windows query failed:", windowsRes.error);
+    throw new Error(`טעינת טפסי הקבלה נכשלה: ${windowsRes.error.message}`);
+  }
+  if (submissionsRes.error) {
+    console.error("[admin/intake] intake_submissions query failed:", submissionsRes.error);
+  }
+
   const windows: IntakeWindowRow[] = (windowsRes.data ?? []).map((w) => {
     const row = w as unknown as {
       id: string;
@@ -44,7 +54,7 @@ export default async function AdminIntakePage() {
       opens_at: string;
       closes_at: string;
       is_revoked: boolean;
-      has_recoverable_link: boolean;
+      encrypted_token: string | null;
       profiles: { full_name: string | null } | null;
     };
     return {
@@ -53,7 +63,7 @@ export default async function AdminIntakePage() {
       opensAt: row.opens_at,
       closesAt: row.closes_at,
       isRevoked: row.is_revoked,
-      hasRecoverableLink: Boolean(row.has_recoverable_link),
+      hasRecoverableLink: Boolean(row.encrypted_token),
       createdByName: row.profiles?.full_name ?? null,
     };
   });

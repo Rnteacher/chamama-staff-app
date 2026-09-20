@@ -1,10 +1,12 @@
-"use client";
+﻿"use client";
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   markMessagesReadAction,
   markMessagesUnreadAction,
+  deleteMessageAction,
+  editMessageAction,
 } from "@/lib/actions/messages";
 import { deleteMeetingReportAction } from "@/lib/actions/meetings-delete";
 import { updateMeetingReportAction } from "@/lib/actions/meetings";
@@ -30,6 +32,7 @@ export interface FeedItem {
   next_steps: string | null;
   meeting_at: string | null;
   source_id: string | null;
+  author_staff_id: string | null;
 }
 
 type FilterTab = "all" | "ongoing" | "project";
@@ -50,6 +53,9 @@ export default function UnifiedUpdatesFeed({
   focusMessageId,
   studentId,
   canEditReports,
+  currentStaffId,
+  isSuperAdmin = false,
+  readOnly = false,
 }: {
   items: FeedItem[];
   canModerate: boolean;
@@ -57,6 +63,11 @@ export default function UnifiedUpdatesFeed({
   focusMessageId?: string;
   studentId: string;
   canEditReports: boolean;
+  /** server-derived current staff identity — gates message edit/delete */
+  currentStaffId: string | null;
+  isSuperAdmin?: boolean;
+  /** View-As: hide every mutation control */
+  readOnly?: boolean;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<FilterTab>("all");
@@ -89,6 +100,13 @@ export default function UnifiedUpdatesFeed({
         await markMessagesUnreadAction({ messageIds: [id] });
       }
       router.refresh();
+    });
+  }
+
+  function handleDeleteMessage(id: string) {
+    startTransition(async () => {
+      const res = await deleteMessageAction(id);
+      if (res.ok) router.refresh();
     });
   }
 
@@ -186,10 +204,20 @@ export default function UnifiedUpdatesFeed({
                 {/* actions */}
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   {isMessage && (
-                    <button type="button" onClick={() => markRead(item.item_id, !item.read)}
-                      className="rounded-full px-2.5 py-1 text-xs font-semibold text-muted hover:bg-bg">
-                      {item.read ? "סמן כלא נקרא" : "סמן כנקרא"}
-                    </button>
+                    <>
+                      <button type="button" onClick={() => markRead(item.item_id, !item.read)}
+                        className="rounded-full px-2.5 py-1 text-xs font-semibold text-muted hover:bg-bg">
+                        {item.read ? "סמן כלא נקרא" : "סמן כנקרא"}
+                      </button>
+                      {!readOnly && (item.author_staff_id === currentStaffId || isSuperAdmin) && (
+                        <MessageEditDelete
+                          messageId={item.source_id ?? item.item_id}
+                          currentBody={item.body ?? ""}
+                          canEdit={item.author_staff_id === currentStaffId}
+                          onDelete={() => handleDeleteMessage(item.source_id ?? item.item_id)}
+                        />
+                      )}
+                    </>
                   )}
                   {isReport && (
                     <>
@@ -281,5 +309,45 @@ export default function UnifiedUpdatesFeed({
         );
       })()}
     </section>
+  );
+}
+
+function MessageEditDelete({ messageId, currentBody, canEdit, onDelete }: {
+  messageId: string;
+  currentBody: string;
+  canEdit: boolean;
+  onDelete: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [body, setBody] = useState(currentBody);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const router = useRouter();
+
+  if (editing) {
+    return (
+      <div className="mt-2 flex flex-col gap-2">
+        <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={3} className="w-full rounded-xl border border-line px-3 py-2 text-sm" />
+        {error && <p className="text-xs text-danger">{error}</p>}
+        <div className="flex gap-1.5">
+          <button type="button" disabled={pending} onClick={() => startTransition(async () => {
+            const res = await editMessageAction({ messageId, body });
+            if (res.ok) { setEditing(false); router.refresh(); } else setError(res.error);
+          })} className="rounded-full bg-brand px-3 py-1 text-xs font-bold text-ink">שמירה</button>
+          <button type="button" onClick={() => setEditing(false)} className="rounded-full border border-line px-3 py-1 text-xs">ביטול</button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <>
+      {canEdit && (
+        <button type="button" onClick={() => setEditing(true)} className="rounded-full px-2.5 py-1 text-xs font-semibold text-muted hover:bg-bg">עריכה</button>
+      )}
+      <button type="button" onClick={() => { if (confirm("למחוק עדכון זה? הדיווחים ושאר העדכונים לא יושפעו.")) { startTransition(async () => {
+        const res = await deleteMessageAction(messageId);
+        if (res.ok) router.refresh(); else setError(res.error ?? "נכשל");
+      }); } }} className="rounded-full px-2.5 py-1 text-xs font-semibold text-danger hover:bg-red-50">מחיקה</button>
+    </>
   );
 }
