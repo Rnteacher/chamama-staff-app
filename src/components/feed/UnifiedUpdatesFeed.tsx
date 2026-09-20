@@ -33,11 +33,7 @@ export interface FeedItem {
 }
 
 type FilterTab = "all" | "ongoing" | "project";
-const TABS: { key: FilterTab; label: string }[] = [
-  { key: "all", label: "כל העדכונים" },
-  { key: "ongoing", label: "עדכונים שוטפים" },
-  { key: "project", label: "עדכוני פרויקט" },
-];
+const CTX_TOGGLE: Record<string, string> = { mentor: "פגישות מנטור", master: "פגישות מאסטר" };
 const CTX: Record<string, string> = { mentor: "מנטור", master: "מאסטר" };
 const ST: Record<string, string> = { green: "ירוק", yellow: "צהוב", red: "אדום" };
 const ST_CLS: Record<string, string> = {
@@ -64,6 +60,8 @@ export default function UnifiedUpdatesFeed({
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<FilterTab>("all");
+  const [showMentor, setShowMentor] = useState(true);
+  const [showMaster, setShowMaster] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(
     focusMessageId ?? null
   );
@@ -72,9 +70,16 @@ export default function UnifiedUpdatesFeed({
   const [pending, startTransition] = useTransition();
 
   const filtered = useMemo(() => {
-    if (tab === "all") return items;
-    return items.filter((i) => i.category === tab);
-  }, [items, tab]);
+    return items.filter((i) => {
+      // meeting report context filtering (additive toggles, not exclusive tabs)
+      if (i.kind === "report") {
+        const isMentorReport = i.title?.includes("מנטור") ?? false;
+        if (isMentorReport && !showMentor) return false;
+        if (!isMentorReport && !showMaster) return false;
+      }
+      return true;
+    });
+  }, [items, showMentor, showMaster]);
 
   function markRead(id: string, isRead: boolean) {
     startTransition(async () => {
@@ -98,22 +103,24 @@ export default function UnifiedUpdatesFeed({
 
   return (
     <section aria-label="עדכונים" className="flex flex-col gap-3">
-      {/* filter tabs */}
-      <div role="tablist" aria-label="סינון עדכונים" className="flex gap-1">
-        {TABS.map((t) => (
-          <button key={t.key} type="button" role="tab"
-            aria-selected={tab === t.key}
-            onClick={() => setTab(t.key)}
-            className={`rounded-full px-4 py-1.5 text-sm font-semibold transition-colors ${
-              tab === t.key ? "bg-ink text-white" : "border border-line bg-surface text-muted hover:bg-bg"
-            }`}>
-            {t.label}
-          </button>
-        ))}
+      {/* meeting type toggle filters (additive, both on by default) */}
+      <div className="flex gap-2" role="group" aria-label="סינון סוגי פגישות">
+        {Object.entries(CTX_TOGGLE).map(([key, label]) => {
+          const isOn = key === "mentor" ? showMentor : showMaster;
+          return (
+            <button key={key} type="button" aria-pressed={isOn}
+              onClick={() => key === "mentor" ? setShowMentor((v) => !v) : setShowMaster((v) => !v)}
+              className={`rounded-full border px-3.5 py-1.5 text-xs font-bold transition-colors ${
+                isOn ? "border-brand-dark bg-brand-soft text-ink" : "border-line bg-surface text-muted opacity-60"
+              }`}>
+              {isOn ? "✓ " : ""}{label}
+            </button>
+          );
+        })}
       </div>
 
       {filtered.length === 0 ? (
-        <p className="py-4 text-center text-sm text-muted">אין עדכונים בקטגוריה זו.</p>
+        <p className="py-4 text-center text-sm text-muted">??? ??????? ???????? ??.</p>
       ) : (
         <ul className="flex flex-col gap-3">
           {filtered.map((item) => {

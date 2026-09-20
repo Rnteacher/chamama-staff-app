@@ -6,6 +6,8 @@ import {
   createIntakeWindowAction,
   revokeIntakeWindowAction,
   assignMasterFromIntakeAction,
+  copyIntakeLinkAction,
+  reissueIntakeTokenAction,
   type IntakeCreateResult,
 } from "@/lib/actions/intake";
 import type { ActionState } from "@/lib/actions/messages";
@@ -16,6 +18,7 @@ export interface IntakeWindowRow {
   opensAt: string;
   closesAt: string;
   isRevoked: boolean;
+  hasRecoverableLink: boolean;
   createdByName: string | null;
 }
 
@@ -131,7 +134,13 @@ export default function IntakeManager({
                       {st.label}
                     </span>
                     {!w.isRevoked && (
-                      <RevokeButton id={w.id} />
+                      <>
+                        {w.hasRecoverableLink && <CopyLinkButton windowId={w.id} />}
+                        <RevokeButton id={w.id} />
+                      </>
+                    )}
+                    {!w.isRevoked && !w.hasRecoverableLink && (
+                      <ReissueButton windowId={w.id} />
                     )}
                   </span>
                 </li>
@@ -454,5 +463,44 @@ function CreateDialog({
         {state?.ok && null}
       </form>
     </div>
+  );
+}
+
+function CopyLinkButton({ windowId }: { windowId: string }) {
+  const [copied, setCopied] = useState(false);
+  const [pending, startTransition] = useTransition();
+  return (
+    <button type="button" disabled={pending}
+      onClick={() => startTransition(async () => {
+        const res = await copyIntakeLinkAction(windowId);
+        if (res.ok && res.url) {
+          await navigator.clipboard.writeText(res.url);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        }
+      })}
+      className="rounded-full border border-line px-3 py-1 text-xs font-bold text-muted hover:bg-bg"
+      title="העתקת הקישור הציבורי">
+      {copied ? "הועתק ✓" : "העתקת קישור"}
+    </button>
+  );
+}
+
+function ReissueButton({ windowId }: { windowId: string }) {
+  const [pending, startTransition] = useTransition();
+  const router = useRouter();
+  return (
+    <button type="button" disabled={pending}
+      onClick={() => startTransition(async () => {
+        const res = await reissueIntakeTokenAction(windowId);
+        if (res.ok && res.token) {
+          await navigator.clipboard.writeText(`${window.location.origin}/intake/${res.token}`);
+          router.refresh();
+        }
+      })}
+      className="rounded-full border border-line px-3 py-1 text-xs font-bold text-muted"
+      title="יוצר קישור חדש ומבטל את הישן">
+      יצירת קישור חדש
+    </button>
   );
 }

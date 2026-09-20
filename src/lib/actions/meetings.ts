@@ -66,6 +66,24 @@ export async function updateMeetingReportAction(
   return { ok: true };
 }
 
+export async function deactivateMeetingScheduleAction(
+  scheduleId: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireMe();
+  if (!(await assertNotViewAs())) {
+    return { ok: false, error: "לא זמין במצב צפייה" };
+  }
+  if (!/^[0-9a-f-]{36}$/i.test(scheduleId)) {
+    return { ok: false, error: "קלט לא תקין" };
+  }
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("deactivate_meeting_schedule", {
+    p_schedule_id: scheduleId,
+  });
+  if (error) return { ok: false, error: "המחיקה נכשלה" };
+  return { ok: true };
+}
+
 const ADHOC_SCHEMA = z.object({
   studentId: z.string().uuid(),
   context: z.enum(["mentor", "master"]),

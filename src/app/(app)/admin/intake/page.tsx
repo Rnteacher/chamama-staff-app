@@ -20,7 +20,7 @@ export default async function AdminIntakePage() {
     await Promise.all([
       supabase
         .from("intake_windows")
-        .select("id, title, opens_at, closes_at, is_revoked, created_at, profiles(full_name)")
+        .select("id, title, opens_at, closes_at, is_revoked, created_at, profiles(full_name), encrypted_token IS NOT NULL as has_recoverable_link")
         .order("created_at", { ascending: false }),
       supabase
         .from("intake_submissions")
@@ -44,6 +44,7 @@ export default async function AdminIntakePage() {
       opens_at: string;
       closes_at: string;
       is_revoked: boolean;
+      has_recoverable_link: boolean;
       profiles: { full_name: string | null } | null;
     };
     return {
@@ -52,6 +53,7 @@ export default async function AdminIntakePage() {
       opensAt: row.opens_at,
       closesAt: row.closes_at,
       isRevoked: row.is_revoked,
+      hasRecoverableLink: Boolean(row.has_recoverable_link),
       createdByName: row.profiles?.full_name ?? null,
     };
   });

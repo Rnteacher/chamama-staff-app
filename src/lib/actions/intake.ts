@@ -1,4 +1,4 @@
-"use server";
+﻿"use server";
 
 import { revalidatePath } from "next/cache";
 import { randomBytes } from "node:crypto";
@@ -6,6 +6,7 @@ import { z } from "zod";
 import { requireMe, hasRole } from "@/lib/auth";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { hashIntakeToken } from "@/lib/intake-token";
+import { encryptToken } from "@/lib/intake-crypto";
 import { jerusalemWallTimeToUtc } from "@/lib/meetings";
 import type { ActionState } from "@/lib/actions/messages";
 import { assertNotViewAs } from "@/lib/view-as";
@@ -56,6 +57,7 @@ export async function createIntakeWindowAction(
     // cryptographically unguessable public token; only its SHA-256 is stored
     const token = randomBytes(32).toString("base64url");
     const tokenHash = hashIntakeToken(token);
+    const enc = encryptToken(token);
 
     // datetime-local fields are wall time in the school timezone
     // (Asia/Jerusalem) — NOT the server timezone (UTC on Vercel)
@@ -165,5 +167,71 @@ export async function assignMasterFromIntakeAction(
   } catch (e) {
     if (e && typeof e === "object" && "digest" in e) throw e;
     return { ok: false, error: "הפעולה נכשלה. נסו שוב." };
+  }
+}
+
+/** Copy the SAME public link by decrypting the stored encrypted token. */
+export async function copyIntakeLinkAction(
+  windowId: string
+): Promise<{ ok: boolean; url?: string; needsReissue?: boolean; error?: string }> {
+  try {
+    const { me, allowed } = await requireCoordinator();
+    if (!allowed) return { ok: false, error: "אין הרשאה" };
+    if (!(await assertNotViewAs())) return { ok: false, error: "לא זמין במצב צפייה" };
+    const admin = createAdminClient();
+    const { data: w } = await admin
+      .from("intake_windows")
+      .select("encrypted_token, encryption_iv, encryption_tag")
+      .eq("id", windowId)
+      .maybeSingle();
+    if (!w?.encrypted_token || !w?.encryption_iv || !w?.encryption_tag) {
+      return { ok: false, needsReissue: true };
+    }
+    const { decryptToken } = await import("@/lib/intake-crypto");
+    const raw = decryptToken(w.encrypted_token, w.encryption_iv, w.encryption_tag);
+    if (!raw) return { ok: false, needsReissue: true };
+    return { ok: true, url: raw };
+  } catch {
+    return { ok: false, error: "שגיאה בהעתקת הקישור" };
+  }
+}
+
+/** Rotate the token for legacy windows (old link stops working; new link works). */
+export async function reissueIntakeTokenAction(
+  windowId: string
+): Promise<{ ok: boolean; token?: string; error?: string }> {
+  try {
+    const { me, allowed } = await requireCoordinator();
+    if (!allowed) return { ok: false, error: "אין הרשאה" };
+    if (!me.staffId) return { ok: false, error: "אין זהות צוות" };
+    const { randomBytes } = await import("node:crypto");
+    const token = randomBytes(32).toString("base64url");
+    const tokenHash = hashIntakeToken(token);
+    const enc = encryptToken(token);
+
+    const admin = createAdminClient();
+    const { error } = await admin
+      .from("intake_windows")
+      .update({
+        token_hash: hashIntakeToken(token),
+        encrypted_token: enc.encrypted,
+        encryption_iv: enc.iv,
+        encryption_tag: enc.tag,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", windowId);
+    if (error) return { ok: false, error: "החידוש נכשל" };
+
+    await admin.from("audit_logs").insert({
+      actor_staff_id: me.staffId,
+      action: "intake_token_reissued",
+      entity_type: "intake_window",
+      entity_id: windowId,
+      metadata: {},
+    });
+
+    return { ok: true, token };
+  } catch {
+    return { ok: false, error: "החידוש נכשל" };
   }
 }

@@ -131,6 +131,17 @@ export default function ConversationalForm({
   function setValue(id: string, value: unknown) {
     setQuestionError(null);
     onAnswersChange({ ...answers, [id]: value });
+    // auto-advance single-select (not multi-select, not text, not textarea, not datetime)
+    if (q && q.type === "single-select") {
+      const err = q.validate ? q.validate({ ...answers, [id]: value }) : null;
+      if (!err) {
+        if (safeIndex + 1 < visible.length) {
+          goTo(safeIndex + 1, 1);
+        } else {
+          setPhase("review");
+        }
+      }
+    }
   }
 
   function toggleMulti(id: string, value: string) {

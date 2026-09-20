@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireMe, hasRole } from "@/lib/auth";
-import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { buildCsv, csvWithBom } from "@/lib/csv-export";
 import { assertNotViewAs } from "@/lib/view-as";
 
@@ -8,19 +8,9 @@ export const dynamic = "force-dynamic";
 
 const HEADERS = ["שם החניך", "קבוצה", "מגמה", "הצהרת כוונות ראשונית", "מאסטר משובץ"];
 
-/**
- * CSV export for the project coordinator.
- * GET /admin/intake/export?groupId=...&majorName=...&scope=filtered|all
- *
- * Requires project_coordinator or super_admin. View-As blocks export.
- * Exports the intake submissions + canonical project/master data.
- */
 export async function GET(request: Request) {
   const me = await requireMe();
-  if (
-    !hasRole(me, "project_coordinator") &&
-    !hasRole(me, "super_admin")
-  ) {
+  if (!hasRole(me, "project_coordinator") && !hasRole(me, "super_admin")) {
     return NextResponse.json({ error: "unauthorized" }, { status: 403 });
   }
   if (!(await assertNotViewAs())) {
@@ -28,37 +18,35 @@ export async function GET(request: Request) {
   }
 
   const { searchParams } = new URL(request.url);
+  const intakeId = searchParams.get("intakeId") || "";
   const groupId = searchParams.get("groupId") || "";
-  const majorFilter = searchParams.get("major") || ""; // ''=all, 'none'=לא במגמה, or major id
-  const scope = searchParams.get("scope") || "filtered";
+  const majorFilter = searchParams.get("major") || "";
 
   const supabase = await createClient();
 
-  // fetch intake submissions with joins
+  // fetch submissions for the selected intake
   let query = supabase
     .from("intake_submissions")
     .select(
-      "id, intent_text, major_id, students(first_name, last_name, group_id, greenhouse_groups(name)), majors(name), " +
+      "id, intent_text, major_id, updated_at, students(id, first_name, last_name, group_id, greenhouse_groups(name)), majors(name), " +
       "assigned:profiles!intake_submissions_assigned_master_staff_id_fkey(full_name)"
     )
     .order("updated_at", { ascending: false });
-  if (scope === "filtered" && groupId) {
-    query = query.eq("students.group_id", groupId);
-  }
+  if (intakeId) query = query.eq("intake_id", intakeId);
   const { data: submissions, error } = await query;
   if (error || !submissions) {
     return NextResponse.json({ error: "query failed" }, { status: 500 });
   }
 
-  // canonical project + primary master data
+  // fetch canonical project + primary master data
   const [projectsRes, mastersRes] = await Promise.all([
     supabase.from("student_projects").select("student_id, intent_text, major_id, majors(name)"),
-    supabase.from("master_assignments").select("student_id, staff_id, is_primary, profiles(full_name)").eq("is_primary", true),
+    supabase.from("master_assignments").select("student_id, is_primary, profiles(full_name)").eq("is_primary", true),
   ]);
   const projectByStudent = new Map(
     (projectsRes.data ?? []).map((p) => [p.student_id, p])
   );
-  const primaryMasterByStudent = new Map(
+  const primaryByStudent = new Map(
     (mastersRes.data ?? []).map((m) => [m.student_id, m])
   );
 
@@ -68,7 +56,9 @@ export async function GET(request: Request) {
       id: string;
       intent_text: string;
       major_id: string | null;
+      updated_at: string;
       students: {
+        id: string;
         first_name: string;
         last_name: string;
         group_id: string | null;
@@ -77,53 +67,44 @@ export async function GET(request: Request) {
       majors: { name: string } | null;
       assigned: { full_name: string | null } | null;
     };
+    const studentName = row.students
+      ? `${row.students.first_name} ${row.students.last_name}`.trim()
+      : "";
+    const groupName = row.students?.greenhouse_groups?.name ?? "";
+    const groupId = row.students?.group_id ?? "";
 
-    // major filter
-    if (majorFilter) {
-      const projectMajor = projectByStudent.get(row.students?.first_name + " " + row.students?.last_name)
-        ? (projectByStudent.get(row.students?.first_name + " " + row.students?.last_name) as unknown as { major_id: string | null })?.major_id
-        : undefined;
-      if (majorFilter === "none") {
-        if (row.major_id !== null || projectMajor !== null) continue;
-      } else if (row.major_id !== majorFilter) {
-        continue;
-      }
-    }
+    if (groupId && (row.students?.id ?? "") !== groupId) continue;
 
-    // canonical master: primary from master_assignments, fallback to intake assigned
-    const primary = primaryMasterByStudent.get(
-      (row.students?.first_name ?? "") + " " + (row.students?.last_name ?? "")
-    );
-    const masterName =
-      (primary as unknown as { profiles: { full_name: string } } | undefined)?.profiles?.full_name ??
-      row.assigned?.full_name ??
-      "";
-
-    // canonical major: from project if exists, else from submission
-    const proj = projectByStudent.get(
-      (row.students?.first_name ?? "") + " " + (row.students?.last_name ?? "")
-    );
+    // canonical project major
+    const proj = projectByStudent.get(row.students?.id ?? "");
     const majorName = proj
       ? ((proj as unknown as { majors: { name: string } | null })?.majors?.name ?? "לא במגמה")
       : row.majors?.name ?? "לא במגמה";
 
-    rows.push([
-      `${row.students?.first_name ?? ""} ${row.students?.last_name ?? ""}`.trim(),
-      row.students?.greenhouse_groups?.name ?? "",
-      majorName,
-      row.intent_text,
-      masterName,
-    ]);
+    if (majorFilter) {
+      if (majorFilter === "none") {
+        if (majorName !== "לא במגמה" && majorName !== "") continue;
+      } else if (majorName !== majorFilter) continue;
+    }
+
+    const primary = primaryByStudent.get(row.students?.id ?? "");
+    const masterName =
+      (primary as unknown as { profiles: { full_name: string } } | undefined)?.profiles?.full_name ??
+      row.assigned?.full_name ??
+      "טרם שובץ";
+
+    rows.push([studentName, groupName, majorName, row.intent_text, masterName]);
   }
 
   const csv = buildCsv(HEADERS, rows);
   const body = csvWithBom(csv);
 
+  const date = new Date().toISOString().slice(0, 10);
   return new NextResponse(new Uint8Array(body), {
     status: 200,
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="intake-assignments-${new Date().toISOString().slice(0, 10)}.csv"`,
+      "Content-Disposition": `attachment; filename="chamama-project-assignments-${date}.csv"`,
     },
   });
 }

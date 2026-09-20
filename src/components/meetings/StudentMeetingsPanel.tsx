@@ -75,7 +75,7 @@ export default function StudentMeetingsPanel({
               }}
               className="rounded-full bg-ink px-4 py-2 text-sm font-bold text-white"
             >
-              {schedules.some((s) => s.mine) ? "עריכת הפגישה שלי" : "קביעת פגישה שבועית"}
+              {schedules.some((s) => s.mine) ? "הוספת פגישה" : "הוספת פגישה"}
             </button>
           )}
           <button
