@@ -205,7 +205,7 @@ export default function UnifiedUpdatesFeed({
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   {isMessage && (
                     <>
-                      <button type="button" onClick={() => markRead(item.item_id, !item.read)}
+                      <button type="button" onClick={() => markRead(item.source_id ?? item.item_id, !item.read)}
                         className="rounded-full px-2.5 py-1 text-xs font-semibold text-muted hover:bg-bg">
                         {item.read ? "סמן כלא נקרא" : "סמן כנקרא"}
                       </button>

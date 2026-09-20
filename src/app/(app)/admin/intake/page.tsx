@@ -20,7 +20,10 @@ export default async function AdminIntakePage() {
     await Promise.all([
       supabase
         .from("intake_windows")
-        .select("id, title, opens_at, closes_at, is_revoked, created_at, profiles(full_name), encrypted_token")
+        .select(
+          "id, title, opens_at, closes_at, is_revoked, created_at, profiles(full_name), encrypted_token, intake_window_tokens(encrypted_token, revoked_at)"
+        )
+        .is("deleted_at", null) // deleted intake windows disappear from the management list
         .order("created_at", { ascending: false }),
       supabase
         .from("intake_submissions")
@@ -56,14 +59,23 @@ export default async function AdminIntakePage() {
       is_revoked: boolean;
       encrypted_token: string | null;
       profiles: { full_name: string | null } | null;
+      intake_window_tokens: { encrypted_token: string | null; revoked_at: string | null }[] | null;
     };
+    // recoverable = the window's own encrypted token OR an active additional
+    // token with encrypted material. Only the BOOLEAN reaches the browser —
+    // never encrypted_token / encryption_iv / encryption_tag / plaintext.
+    const hasRecoverableLink =
+      Boolean(row.encrypted_token) ||
+      (row.intake_window_tokens ?? []).some(
+        (t) => Boolean(t.encrypted_token) && t.revoked_at === null
+      );
     return {
       id: row.id,
       title: row.title,
       opensAt: row.opens_at,
       closesAt: row.closes_at,
       isRevoked: row.is_revoked,
-      hasRecoverableLink: Boolean(row.encrypted_token),
+      hasRecoverableLink,
       createdByName: row.profiles?.full_name ?? null,
     };
   });

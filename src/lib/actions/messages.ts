@@ -223,6 +223,9 @@ export async function markMessagesReadAction(
   if (!parsed.success) return { ok: false, error: "קלט לא תקין" };
   const me = await requireMe();
   if (!me.staffId) return { ok: false, error: errorMessage() };
+  if (!(await assertNotViewAs())) {
+    return { ok: false, error: "לא זמין במצב צפייה" };
+  }
   const supabase = await createClient();
 
   const rows = parsed.data.messageIds.map((messageId) => ({
@@ -252,6 +255,9 @@ export async function markMessagesUnreadAction(
   if (!parsed.success) return { ok: false, error: "קלט לא תקין" };
   const me = await requireMe();
   if (!me.staffId) return { ok: false, error: errorMessage() };
+  if (!(await assertNotViewAs())) {
+    return { ok: false, error: "לא זמין במצב צפייה" };
+  }
   const supabase = await createClient();
 
   const { error } = await supabase

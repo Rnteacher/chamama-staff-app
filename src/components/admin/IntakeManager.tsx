@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import {
   createIntakeWindowAction,
   revokeIntakeWindowAction,
+  restoreIntakeWindowAction,
+  deleteIntakeWindowAction,
   assignMasterFromIntakeAction,
   copyIntakeLinkAction,
   reissueIntakeTokenAction,
@@ -37,13 +39,17 @@ export interface IntakeSubmissionRow {
 }
 
 function windowStatus(w: IntakeWindowRow): { label: string; cls: string } {
-  if (w.isRevoked) return { label: "מבוטל", cls: "border-warn text-warn" };
+  if (w.isRevoked) return { label: "מושבת", cls: "border-warn text-warn" };
   const now = Date.now();
   if (now < new Date(w.opensAt).getTime())
     return { label: "טרם נפתח", cls: "border-line text-muted" };
   if (now > new Date(w.closesAt).getTime())
     return { label: "נסגר", cls: "border-line text-muted" };
   return { label: "פתוח", cls: "border-brand-dark bg-brand-soft text-ink" };
+}
+
+function windowStatusLabel(w: IntakeWindowRow): string {
+  return windowStatus(w).label;
 }
 
 export default function IntakeManager({
@@ -64,6 +70,7 @@ export default function IntakeManager({
   const [groupFilter, setGroupFilter] = useState("");
   const [majorFilter, setMajorFilter] = useState("");
   const [windowFilter, setWindowFilter] = useState("");
+  const [csvWindowId, setCsvWindowId] = useState("");
 
   const filtered = submissions.filter((s) => {
     if (groupFilter && s.groupId !== groupFilter) return false;
@@ -88,17 +95,11 @@ export default function IntakeManager({
           <div>
             <h2 className="font-extrabold">טפסי קבלה ציבוריים</h2>
             <p className="mt-1 text-sm text-muted">
-              קישור ציבורי מוגבל בזמן להצהרות כוונות של חניכים. הקישור מוצג
-              פעם אחת בעת היצירה — שמרו אותו לפני סגירת החלון.
+              קישור ציבורי מוגבל בזמן להצהרות כוונות של חניכים. ניתן להעתיק
+              את הקישור בכל עת, להשבית, להפעיל מחדש ולמחוק כל טופס.
             </p>
           </div>
           <div className="flex gap-2">
-            <a
-              href={`/admin/intake/export?scope=filtered${groupFilter ? `&groupId=${groupFilter}` : ""}`}
-              className="rounded-full border border-brand-dark px-4 py-2 text-sm font-bold text-brand-dark hover:bg-brand-soft"
-            >
-              ייצוא CSV
-            </a>
             <button
               type="button"
               onClick={() => setCreateOpen(true)}
@@ -107,6 +108,43 @@ export default function IntakeManager({
               טופס חדש
             </button>
           </div>
+        </div>
+
+        {/* CSV export — requires selecting exactly ONE intake window */}
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-bg p-3">
+          <h3 className="text-sm font-extrabold">יצוא CSV</h3>
+          <label className="text-xs font-semibold text-muted">
+            <span className="sr-only">בחירת טופס ליצוא</span>
+            <select
+              value={csvWindowId}
+              onChange={(e) => setCsvWindowId(e.target.value)}
+              className="rounded-xl border border-line bg-white px-3 py-2 text-sm"
+            >
+              <option value="">— בחרו טופס ליצוא —</option>
+              {windows.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.title} · {windowStatusLabel(w)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <a
+            href={csvWindowId ? `/admin/intake/export?intakeId=${csvWindowId}` : undefined}
+            onClick={(e) => {
+              if (!csvWindowId) e.preventDefault();
+            }}
+            aria-disabled={!csvWindowId}
+            className={`rounded-full px-4 py-2 text-sm font-bold ${
+              csvWindowId
+                ? "border border-brand-dark text-brand-dark hover:bg-brand-soft"
+                : "pointer-events-none border border-line text-muted opacity-50"
+            }`}
+          >
+            יצוא CSV
+          </a>
+          {!csvWindowId && (
+            <span className="text-xs text-muted">יש לבחור טופס אחד ליצוא</span>
+          )}
         </div>
 
         {windows.length === 0 ? (
@@ -133,15 +171,17 @@ export default function IntakeManager({
                     <span className={`rounded-full border px-2.5 py-0.5 text-xs font-bold ${st.cls}`}>
                       {st.label}
                     </span>
-                    {!w.isRevoked && (
-                      <>
-                        {w.hasRecoverableLink && <CopyLinkButton windowId={w.id} />}
-                        <RevokeButton id={w.id} />
-                      </>
+                    {w.hasRecoverableLink ? (
+                      <CopyLinkButton windowId={w.id} />
+                    ) : (
+                      <ReissueButton windowId={w.id} onCreated={setCreatedLink} />
                     )}
-                    {!w.isRevoked && !w.hasRecoverableLink && (
-                      <ReissueButton windowId={w.id} />
+                    {w.isRevoked ? (
+                      <RestoreButton id={w.id} />
+                    ) : (
+                      <RevokeButton id={w.id} />
                     )}
+                    <DeleteButton id={w.id} />
                   </span>
                 </li>
               );
@@ -292,6 +332,51 @@ function RevokeButton({ id }: { id: string }) {
       className="rounded-full border border-line px-3 py-1 text-xs font-bold text-danger disabled:opacity-60"
     >
       השבתה
+    </button>
+  );
+}
+
+function RestoreButton({ id }: { id: string }) {
+  const [pending, startTransition] = useTransition();
+  const router = useRouter();
+  return (
+    <button
+      type="button"
+      disabled={pending}
+      onClick={() =>
+        startTransition(async () => {
+          const fd = new FormData();
+          fd.set("id", id);
+          await restoreIntakeWindowAction(null, fd);
+          router.refresh();
+        })
+      }
+      className="rounded-full border border-brand-dark bg-brand-soft px-3 py-1 text-xs font-bold text-brand-dark disabled:opacity-60"
+    >
+      הפעלה מחדש
+    </button>
+  );
+}
+
+function DeleteButton({ id }: { id: string }) {
+  const [pending, startTransition] = useTransition();
+  const router = useRouter();
+  return (
+    <button
+      type="button"
+      disabled={pending}
+      onClick={() => {
+        if (!confirm("למחוק את טופס הקבלה? טופס עם הצהרות שהתקבלו יוסר מהרשימה אך ההיסטוריה תישמר.")) return;
+        startTransition(async () => {
+          const fd = new FormData();
+          fd.set("id", id);
+          await deleteIntakeWindowAction(null, fd);
+          router.refresh();
+        });
+      }}
+      className="rounded-full border border-line px-3 py-1 text-xs font-bold text-muted hover:bg-red-50 disabled:opacity-60"
+    >
+      מחיקה
     </button>
   );
 }
@@ -486,7 +571,10 @@ function CopyLinkButton({ windowId }: { windowId: string }) {
   );
 }
 
-function ReissueButton({ windowId }: { windowId: string }) {
+function ReissueButton({ windowId, onCreated }: {
+  windowId: string;
+  onCreated: (link: string) => void;
+}) {
   const [pending, startTransition] = useTransition();
   const router = useRouter();
   return (
@@ -494,13 +582,13 @@ function ReissueButton({ windowId }: { windowId: string }) {
       onClick={() => startTransition(async () => {
         const res = await reissueIntakeTokenAction(windowId);
         if (res.ok && res.token) {
-          await navigator.clipboard.writeText(`${window.location.origin}/intake/${res.token}`);
+          onCreated(`${window.location.origin}/intake/${res.token}`);
           router.refresh();
         }
       })}
       className="rounded-full border border-line px-3 py-1 text-xs font-bold text-muted"
-      title="יוצר קישור חדש ומבטל את הישן">
-      יצירת קישור חדש
+      title="מוסיף קישור ציבורי נוסף שניתן להעתיק שוב — הקישור הקיים נשאר תקף">
+      יצירת קישור נוסף
     </button>
   );
 }

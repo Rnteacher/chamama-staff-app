@@ -8,6 +8,8 @@ export const dynamic = "force-dynamic";
 
 const HEADERS = ["שם החניך", "קבוצה", "מגמה", "הצהרת כוונות ראשונית", "מאסטר משובץ"];
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function GET(request: Request) {
   const me = await requireMe();
   if (!hasRole(me, "project_coordinator") && !hasRole(me, "super_admin")) {
@@ -18,36 +20,51 @@ export async function GET(request: Request) {
   }
 
   const { searchParams } = new URL(request.url);
-  const intakeId = searchParams.get("intakeId") || "";
-  const groupId = searchParams.get("groupId") || "";
-  const majorFilter = searchParams.get("major") || "";
+  const intakeId = searchParams.get("intakeId") ?? "";
+  // a specific intake window is REQUIRED — never fall back to "export all"
+  if (!UUID_RE.test(intakeId)) {
+    return NextResponse.json(
+      { error: "intakeId is required" },
+      { status: 400 }
+    );
+  }
 
   const supabase = await createClient();
 
-  // fetch submissions for the selected intake
-  let query = supabase
+  // the window must exist and be manageable (not soft-deleted)
+  const { data: windowRow, error: windowErr } = await supabase
+    .from("intake_windows")
+    .select("id, title")
+    .eq("id", intakeId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (windowErr) {
+    return NextResponse.json({ error: "query failed" }, { status: 500 });
+  }
+  if (!windowRow) {
+    return NextResponse.json({ error: "not found" }, { status: 404 });
+  }
+
+  // submissions belonging ONLY to the selected intake
+  const { data: submissions, error } = await supabase
     .from("intake_submissions")
     .select(
-      "id, intent_text, major_id, updated_at, students(id, first_name, last_name, group_id, greenhouse_groups(name)), majors(name), " +
+      "id, intent_text, updated_at, students(id, first_name, last_name, greenhouse_groups(name)), majors(name), " +
       "assigned:profiles!intake_submissions_assigned_master_staff_id_fkey(full_name)"
     )
+    .eq("intake_id", intakeId)
     .order("updated_at", { ascending: false });
-  if (intakeId) query = query.eq("intake_id", intakeId);
-  const { data: submissions, error } = await query;
   if (error || !submissions) {
     return NextResponse.json({ error: "query failed" }, { status: 500 });
   }
 
-  // fetch canonical project + primary master data
-  const [projectsRes, mastersRes] = await Promise.all([
-    supabase.from("student_projects").select("student_id, intent_text, major_id, majors(name)"),
-    supabase.from("master_assignments").select("student_id, is_primary, profiles(full_name)").eq("is_primary", true),
-  ]);
-  const projectByStudent = new Map(
-    (projectsRes.data ?? []).map((p) => [p.student_id, p])
-  );
+  // canonical assigned primary master (assignment decided by the coordinator)
+  const { data: mastersRes } = await supabase
+    .from("master_assignments")
+    .select("student_id, is_primary, profiles(full_name)")
+    .eq("is_primary", true);
   const primaryByStudent = new Map(
-    (mastersRes.data ?? []).map((m) => [m.student_id, m])
+    (mastersRes ?? []).map((m) => [m.student_id, m])
   );
 
   const rows: string[][] = [];
@@ -55,13 +72,11 @@ export async function GET(request: Request) {
     const row = s as unknown as {
       id: string;
       intent_text: string;
-      major_id: string | null;
       updated_at: string;
       students: {
         id: string;
         first_name: string;
         last_name: string;
-        group_id: string | null;
         greenhouse_groups: { name: string } | null;
       } | null;
       majors: { name: string } | null;
@@ -71,21 +86,8 @@ export async function GET(request: Request) {
       ? `${row.students.first_name} ${row.students.last_name}`.trim()
       : "";
     const groupName = row.students?.greenhouse_groups?.name ?? "";
-    const groupId = row.students?.group_id ?? "";
-
-    if (groupId && (row.students?.id ?? "") !== groupId) continue;
-
-    // canonical project major
-    const proj = projectByStudent.get(row.students?.id ?? "");
-    const majorName = proj
-      ? ((proj as unknown as { majors: { name: string } | null })?.majors?.name ?? "לא במגמה")
-      : row.majors?.name ?? "לא במגמה";
-
-    if (majorFilter) {
-      if (majorFilter === "none") {
-        if (majorName !== "לא במגמה" && majorName !== "") continue;
-      } else if (majorName !== majorFilter) continue;
-    }
+    // intended major: the requested major from the submission itself
+    const majorName = row.majors?.name ?? "לא במגמה";
 
     const primary = primaryByStudent.get(row.students?.id ?? "");
     const masterName =
@@ -104,7 +106,8 @@ export async function GET(request: Request) {
     status: 200,
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="chamama-project-assignments-${date}.csv"`,
+      // header values must be ByteString — keep the filename ASCII
+      "Content-Disposition": `attachment; filename="intake-export-${date}.csv"`,
     },
   });
 }

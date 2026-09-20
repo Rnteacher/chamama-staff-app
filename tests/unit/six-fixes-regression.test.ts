@@ -181,7 +181,7 @@ describe("6. public intake list", () => {
 
   it("selects encrypted_token server-side and maps a boolean only", () => {
     expect(page).toContain("encrypted_token");
-    expect(page).toContain("hasRecoverableLink: Boolean(row.encrypted_token)");
+    expect(page).toMatch(/hasRecoverableLink\s*=|hasRecoverableLink,/);
     // the browser-facing row type has no token material
     const rowType = page.slice(
       page.indexOf("const row = w as unknown as"),
@@ -199,14 +199,14 @@ describe("6. public intake list", () => {
   });
 
   it("shows the correct action per link type", () => {
-    expect(manager).toMatch(/w\.hasRecoverableLink && <CopyLinkButton/);
-    expect(manager).toMatch(/!w\.isRevoked && !w\.hasRecoverableLink/);
+    expect(manager).toMatch(/w\.hasRecoverableLink \? \(/);
+    expect(manager).toContain("ReissueButton");
     expect(manager).toContain("העתקת קישור");
-    expect(manager).toContain("יצירת קישור חדש");
+    expect(manager).toContain("יצירת קישור נוסף");
   });
 
-  it("management list is not filtered by deleted/revoked state", () => {
-    expect(page).not.toMatch(/\.eq\("deleted_at"/);
+  it("management list hides only soft-deleted windows", () => {
+    expect(page).toMatch(/\.is\("deleted_at", null\)/);
     expect(page).not.toMatch(/\.eq\("is_revoked", false/);
   });
 });

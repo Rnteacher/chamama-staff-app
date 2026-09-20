@@ -170,33 +170,60 @@ export async function assignMasterFromIntakeAction(
   }
 }
 
-/** Copy the SAME public link by decrypting the stored encrypted token. */
+/** Copy the SAME public link — decrypts the stored recoverable token.
+ *  Never mutates the DB, never rotates or invalidates a token. */
 export async function copyIntakeLinkAction(
   windowId: string
 ): Promise<{ ok: boolean; url?: string; needsReissue?: boolean; error?: string }> {
   try {
-    const { me, allowed } = await requireCoordinator();
+    const { allowed } = await requireCoordinator();
     if (!allowed) return { ok: false, error: "אין הרשאה" };
     if (!(await assertNotViewAs())) return { ok: false, error: "לא זמין במצב צפייה" };
+    if (!/^[0-9a-f-]{36}$/i.test(windowId)) return { ok: false, error: "קלט לא תקין" };
     const admin = createAdminClient();
+
+    // 1) the window's own recoverable token (created with the window)
     const { data: w } = await admin
       .from("intake_windows")
       .select("encrypted_token, encryption_iv, encryption_tag")
       .eq("id", windowId)
       .maybeSingle();
-    if (!w?.encrypted_token || !w?.encryption_iv || !w?.encryption_tag) {
-      return { ok: false, needsReissue: true };
+    if (w?.encrypted_token && w?.encryption_iv && w?.encryption_tag) {
+      const { decryptToken } = await import("@/lib/intake-crypto");
+      const raw = decryptToken(w.encrypted_token, w.encryption_iv, w.encryption_tag);
+      if (raw) return { ok: true, url: raw };
     }
-    const { decryptToken } = await import("@/lib/intake-crypto");
-    const raw = decryptToken(w.encrypted_token, w.encryption_iv, w.encryption_tag);
-    if (!raw) return { ok: false, needsReissue: true };
-    return { ok: true, url: raw };
+
+    // 2) an additional recoverable token from intake_window_tokens
+    const { data: tokens } = await admin
+      .from("intake_window_tokens")
+      .select("encrypted_token, encryption_iv, encryption_tag")
+      .eq("intake_window_id", windowId)
+      .is("revoked_at", null)
+      .not("encrypted_token", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    const t = (tokens ?? [])[0] as
+      | { encrypted_token: string; encryption_iv: string; encryption_tag: string }
+      | undefined;
+    if (t?.encrypted_token && t?.encryption_iv && t?.encryption_tag) {
+      const { decryptToken } = await import("@/lib/intake-crypto");
+      const raw = decryptToken(t.encrypted_token, t.encryption_iv, t.encryption_tag);
+      if (raw) return { ok: true, url: raw };
+    }
+
+    return { ok: false, needsReissue: true };
   } catch {
     return { ok: false, error: "שגיאה בהעתקת הקישור" };
   }
 }
 
-/** Rotate the token for legacy windows (old link stops working; new link works). */
+/**
+ * LEGACY windows only: generate an ADDITIONAL recoverable public token.
+ * The original legacy token (intake_windows.token_hash) is left untouched,
+ * so the existing public link keeps working. The new raw token is stored
+ * ONLY as its SHA-256 hash + encrypted copy (never plaintext at rest).
+ */
 export async function reissueIntakeTokenAction(
   windowId: string
 ): Promise<{ ok: boolean; token?: string; error?: string }> {
@@ -204,27 +231,34 @@ export async function reissueIntakeTokenAction(
     const { me, allowed } = await requireCoordinator();
     if (!allowed) return { ok: false, error: "אין הרשאה" };
     if (!me.staffId) return { ok: false, error: "אין זהות צוות" };
+    if (!(await assertNotViewAs())) return { ok: false, error: "לא זמין במצב צפייה" };
     const { randomBytes } = await import("node:crypto");
     const token = randomBytes(32).toString("base64url");
-    const tokenHash = hashIntakeToken(token);
     const enc = encryptToken(token);
 
     const admin = createAdminClient();
-    const { error } = await admin
+    // sanity: the window must exist (and not be soft-deleted)
+    const { data: w } = await admin
       .from("intake_windows")
-      .update({
-        token_hash: hashIntakeToken(token),
-        encrypted_token: enc.encrypted,
-        encryption_iv: enc.iv,
-        encryption_tag: enc.tag,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", windowId);
+      .select("id")
+      .eq("id", windowId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (!w) return { ok: false, error: "הטופס לא נמצא" };
+
+    // ADD a token row — do NOT touch intake_windows.token_hash
+    const { error } = await admin.from("intake_window_tokens").insert({
+      intake_window_id: windowId,
+      token_hash: hashIntakeToken(token),
+      encrypted_token: enc.encrypted,
+      encryption_iv: enc.iv,
+      encryption_tag: enc.tag,
+    });
     if (error) return { ok: false, error: "החידוש נכשל" };
 
     await admin.from("audit_logs").insert({
       actor_staff_id: me.staffId,
-      action: "intake_token_reissued",
+      action: "intake_token_added",
       entity_type: "intake_window",
       entity_id: windowId,
       metadata: {},
@@ -233,5 +267,95 @@ export async function reissueIntakeTokenAction(
     return { ok: true, token };
   } catch {
     return { ok: false, error: "החידוש נכשל" };
+  }
+}
+
+/** Reactivate a disabled intake window — same token, same link, same config. */
+export async function restoreIntakeWindowAction(
+  _prev: ActionState | null,
+  fd: FormData
+): Promise<ActionState> {
+  try {
+    const { me, allowed } = await requireCoordinator();
+    if (!allowed) return { ok: false, error: "אין הרשאה" };
+    if (!(await assertNotViewAs())) return { ok: false, error: "לא זמין במצב צפייה" };
+    if (!me.staffId) return { ok: false, error: "אין זהות צוות מקושרת" };
+    const id = String(fd.get("id") ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return { ok: false, error: "קלט לא תקין" };
+
+    const admin = createAdminClient();
+    const { error } = await admin
+      .from("intake_windows")
+      .update({ is_revoked: false, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    if (error) return { ok: false, error: "ההפעלה מחדש נכשלה" };
+
+    await admin.from("audit_logs").insert({
+      actor_staff_id: me.staffId,
+      action: "intake_window_restored",
+      entity_type: "intake_window",
+      entity_id: id,
+      metadata: {},
+    });
+
+    revalidatePath("/admin/intake");
+    return { ok: true };
+  } catch (e) {
+    if (e && typeof e === "object" && "digest" in e) throw e;
+    return { ok: false, error: "הפעולה נכשלה. נסו שוב." };
+  }
+}
+
+/**
+ * Delete an intake window.
+ *  - no submissions  → hard delete (row removed; nothing historical lost)
+ *  - has submissions → soft delete (deleted_at); management list hides it,
+ *    submission history is preserved.
+ * Both modes are audited. Distinct from disable (השבתה), which is reversible.
+ */
+export async function deleteIntakeWindowAction(
+  _prev: ActionState | null,
+  fd: FormData
+): Promise<ActionState> {
+  try {
+    const { me, allowed } = await requireCoordinator();
+    if (!allowed) return { ok: false, error: "אין הרשאה" };
+    if (!(await assertNotViewAs())) return { ok: false, error: "לא זמין במצב צפייה" };
+    if (!me.staffId) return { ok: false, error: "אין זהות צוות מקושרת" };
+    const id = String(fd.get("id") ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return { ok: false, error: "קלט לא תקין" };
+
+    const admin = createAdminClient();
+    const { count, error: countErr } = await admin
+      .from("intake_submissions")
+      .select("id", { count: "exact", head: true })
+      .eq("intake_id", id);
+    if (countErr) return { ok: false, error: "המחיקה נכשלה" };
+    const hasSubmissions = (count ?? 0) > 0;
+
+    let error: { message: string } | null = null;
+    if (hasSubmissions) {
+      ({ error } = await admin
+        .from("intake_windows")
+        .update({ deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq("id", id));
+    } else {
+      ({ error } = await admin.from("intake_windows").delete().eq("id", id));
+    }
+    if (error) return { ok: false, error: "המחיקה נכשלה" };
+
+    await admin.from("audit_logs").insert({
+      actor_staff_id: me.staffId,
+      action: "intake_window_deleted",
+      entity_type: "intake_window",
+      entity_id: id,
+      metadata: { mode: hasSubmissions ? "soft" : "hard" },
+    });
+
+    revalidatePath("/admin/intake");
+    return { ok: true };
+  } catch (e) {
+    if (e && typeof e === "object" && "digest" in e) throw e;
+    return { ok: false, error: "הפעולה נכשלה. נסו שוב." };
   }
 }
