@@ -7,6 +7,7 @@ export const metadata = { title: "ניהול" };
 const tabs = [
   { href: "/admin", label: "סקירה", superOnly: false },
   { href: "/admin/intake", label: "קבלת פרויקטים", superOnly: false },
+  { href: "/admin/forms", label: "טפסים", superOnly: false },
   { href: "/admin/staff", label: "סגל", superOnly: true },
   { href: "/admin/students", label: "חניכים", superOnly: true },
   { href: "/admin/groups", label: "קבוצות", superOnly: true },

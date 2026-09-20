@@ -89,13 +89,21 @@ export default function IntakeManager({
               פעם אחת בעת היצירה — שמרו אותו לפני סגירת החלון.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            className="rounded-full bg-ink px-4 py-2 text-sm font-bold text-white"
-          >
-            יצירת טופס חדש
-          </button>
+          <div className="flex gap-2">
+            <a
+              href={`/admin/intake/export?scope=filtered${groupFilter ? `&groupId=${groupFilter}` : ""}`}
+              className="rounded-full border border-brand-dark px-4 py-2 text-sm font-bold text-brand-dark hover:bg-brand-soft"
+            >
+              ייצוא CSV
+            </a>
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="rounded-full bg-ink px-4 py-2 text-sm font-bold text-white"
+            >
+              טופס חדש
+            </button>
+          </div>
         </div>
 
         {windows.length === 0 ? (
