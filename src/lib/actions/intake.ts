@@ -8,6 +8,7 @@ import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { hashIntakeToken } from "@/lib/intake-token";
 import { jerusalemWallTimeToUtc } from "@/lib/meetings";
 import type { ActionState } from "@/lib/actions/messages";
+import { assertNotViewAs } from "@/lib/view-as";
 
 export type IntakeCreateResult =
   | { ok: true; token?: string }
@@ -40,6 +41,7 @@ export async function createIntakeWindowAction(
   try {
     const { me, allowed } = await requireCoordinator();
     if (!allowed) return { ok: false, error: "אין הרשאה ליצירת טפסי קבלה" };
+    if (!(await assertNotViewAs())) return { ok: false, error: "לא זמין במצב צפייה" };
     if (!me.staffId) return { ok: false, error: "אין זהות צוות מקושרת" };
 
     const parsed = windowSchema.safeParse({
@@ -100,6 +102,7 @@ export async function revokeIntakeWindowAction(
   try {
     const { me, allowed } = await requireCoordinator();
     if (!allowed) return { ok: false, error: "אין הרשאה" };
+    if (!(await assertNotViewAs())) return { ok: false, error: "לא זמין במצב צפייה" };
     if (!me.staffId) return { ok: false, error: "אין זהות צוות מקושרת" };
     const id = String(fd.get("id") ?? "");
     if (!/^[0-9a-f-]{36}$/i.test(id)) return { ok: false, error: "קלט לא תקין" };
@@ -134,6 +137,7 @@ export async function assignMasterFromIntakeAction(
   try {
     const { allowed } = await requireCoordinator();
     if (!allowed) return { ok: false, error: "אין הרשאה לשיבוץ מאסטר/ית" };
+    if (!(await assertNotViewAs())) return { ok: false, error: "לא זמין במצב צפייה" };
 
     const submissionId = String(fd.get("submissionId") ?? "");
     const masterStaffId = String(fd.get("masterStaffId") ?? "");

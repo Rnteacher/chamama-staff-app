@@ -6,6 +6,11 @@ import ConversationalForm, {
   type Answers,
 } from "@/components/conversational/ConversationalForm";
 import { createBrowserClient } from "@/lib/supabase/browser";
+import {
+  fetchIntakeStudents,
+  submitIntake,
+  type IntakeStudent,
+} from "@/lib/intake-public";
 
 export interface IntakeWizardProps {
   token: string;
@@ -27,26 +32,25 @@ export default function IntakeWizard({
   masters,
 }: IntakeWizardProps) {
   const [answers, setAnswers] = useState<Answers>({});
-  const [students, setStudents] = useState<{ id: string; first_name: string; last_name: string }[]>([]);
+  const [students, setStudents] = useState<IntakeStudent[]>([]);
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const groupId = typeof answers.group_id === "string" ? answers.group_id : null;
 
-  const loadStudents = useCallback(async (gid: string) => {
-    await Promise.resolve(); // keep setState out of the synchronous effect body
-    setLoadingStudents(true);
-    try {
-      const supabase = createBrowserClient();
-      const { data } = await supabase.rpc("public_intake_students", {
-        p_token: token,
-        p_group_id: gid,
-      });
-      setStudents((data ?? []) as { id: string; first_name: string; last_name: string }[]);
-    } finally {
-      setLoadingStudents(false);
-    }
-  }, [token]);
+  const loadStudents = useCallback(
+    async (gid: string) => {
+      await Promise.resolve(); // keep setState out of the synchronous effect body
+      setLoadingStudents(true);
+      try {
+        const supabase = createBrowserClient();
+        setStudents(await fetchIntakeStudents(supabase, token, gid));
+      } finally {
+        setLoadingStudents(false);
+      }
+    },
+    [token]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -129,19 +133,14 @@ export default function IntakeWizard({
     setSubmitError(null);
     const supabase = createBrowserClient();
     const majorChoice = answers.major_choice;
-    const { data, error } = await supabase.rpc("public_intake_submit", {
-      p_token: token,
-      p_student_id: String(answers.student_id ?? ""),
-      p_group_id: String(answers.group_id ?? ""),
-      p_intent: String(answers.intent ?? ""),
-      p_major_id: majorChoice && majorChoice !== "none" ? String(majorChoice) : null,
-      p_master_staff_id: String(answers.master_id ?? ""),
+    const res = await submitIntake(supabase, {
+      token,
+      studentId: String(answers.student_id ?? ""),
+      groupId: String(answers.group_id ?? ""),
+      intent: String(answers.intent ?? ""),
+      majorId: majorChoice && majorChoice !== "none" ? String(majorChoice) : null,
+      masterStaffId: String(answers.master_id ?? ""),
     });
-    if (error) {
-      setSubmitError("השליחה נכשלה. בדקו את החיבור ונסו שוב.");
-      throw error;
-    }
-    const res = (data ?? {}) as { status?: string; message?: string };
     if (res.status !== "ok") {
       setSubmitError(
         res.status === "closed"

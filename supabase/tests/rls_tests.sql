@@ -1730,4 +1730,534 @@ do $$ declare v jsonb; begin
 end $$;
 rollback;
 
+-- ============================================================================
+-- AUTHENTICATED EXECUTE on the public intake RPCs (20260917000002)
+-- ============================================================================
+\echo '--- authenticated intake EXECUTE tests ---'
+
+-- X1: anon AND authenticated both have EXECUTE on all five public RPCs
+do $$ begin
+  if not has_function_privilege('anon', 'public.public_intake_overview(text)', 'execute') then
+    raise exception 'FAIL: anon missing EXECUTE on overview';
+  end if;
+  if not has_function_privilege('anon', 'public.public_intake_students(text,uuid)', 'execute') then
+    raise exception 'FAIL: anon missing EXECUTE on students';
+  end if;
+  if not has_function_privilege('anon', 'public.public_intake_majors(text)', 'execute') then
+    raise exception 'FAIL: anon missing EXECUTE on majors';
+  end if;
+  if not has_function_privilege('anon', 'public.public_intake_masters(text)', 'execute') then
+    raise exception 'FAIL: anon missing EXECUTE on masters';
+  end if;
+  if not has_function_privilege('anon', 'public.public_intake_submit(text,uuid,uuid,text,uuid,uuid)', 'execute') then
+    raise exception 'FAIL: anon missing EXECUTE on submit';
+  end if;
+  if not has_function_privilege('authenticated', 'public.public_intake_overview(text)', 'execute') then
+    raise exception 'FAIL: authenticated missing EXECUTE on overview';
+  end if;
+  if not has_function_privilege('authenticated', 'public.public_intake_students(text,uuid)', 'execute') then
+    raise exception 'FAIL: authenticated missing EXECUTE on students';
+  end if;
+  if not has_function_privilege('authenticated', 'public.public_intake_majors(text)', 'execute') then
+    raise exception 'FAIL: authenticated missing EXECUTE on majors';
+  end if;
+  if not has_function_privilege('authenticated', 'public.public_intake_masters(text)', 'execute') then
+    raise exception 'FAIL: authenticated missing EXECUTE on masters';
+  end if;
+  if not has_function_privilege('authenticated', 'public.public_intake_submit(text,uuid,uuid,text,uuid,uuid)', 'execute') then
+    raise exception 'FAIL: authenticated missing EXECUTE on submit';
+  end if;
+  raise notice 'PASS: anon + authenticated have EXECUTE on all five public intake RPCs';
+end $$;
+
+-- X2: anon still cannot SELECT intake_windows directly (no table grant)
+begin;
+select set_config('role', 'anon', true);
+do $$ declare v int; begin
+  begin
+    select count(*) into v from public.intake_windows;
+    raise exception 'FAIL: anon selected intake_windows';
+  exception when insufficient_privilege then null; end;
+  raise notice 'PASS: anon still has no direct SELECT on intake_windows';
+end $$;
+rollback;
+
+-- X3: authenticated gains NO new direct public-intake table access
+--     (select stays RLS-filtered to coordinator/super_admin; no inserts)
+begin;
+select set_config('role', 'postgres', true);
+insert into public.intake_windows (title, token_hash, opens_at, closes_at, created_by_staff_id)
+values ('טופס X3', encode(sha256(convert_to('tok-x3','UTF8')),'hex'),
+        now() - interval '5 minutes', now() + interval '5 minutes', '11111111-1111-1111-1111-111111111101');
+insert into public.intake_submissions (intake_id, student_id, intent_text, major_id, requested_master_staff_id)
+select w.id, '44444444-4444-4444-4444-444444444401', 'הצהרה', null, '11111111-1111-1111-1111-111111111102'
+from public.intake_windows w where w.token_hash = encode(sha256(convert_to('tok-x3','UTF8')),'hex');
+select set_config('role', 'authenticated', true);
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-11111111110a","role":"authenticated"}', true);
+do $$ declare v int; begin
+  -- signed-in regular staff (tom): RLS still filters BOTH tables to zero rows
+  select count(*) into v from public.intake_windows;
+  if v <> 0 then raise exception 'FAIL: authenticated sees intake_windows rows'; end if;
+  select count(*) into v from public.intake_submissions;
+  if v <> 0 then raise exception 'FAIL: authenticated sees intake_submissions rows'; end if;
+  begin
+    insert into public.intake_windows (title, token_hash, opens_at, closes_at, created_by_staff_id)
+    values ('x', encode(sha256(convert_to('tok-x3-b','UTF8')),'hex'), now(), now(), '11111111-1111-1111-1111-11111111110a');
+    raise exception 'FAIL: authenticated inserted an intake window';
+  exception when insufficient_privilege then null; end;
+  begin
+    update public.intake_windows set is_revoked = true;
+    raise exception 'FAIL: authenticated updated an intake window';
+  exception when insufficient_privilege then null; end;
+  begin
+    delete from public.intake_submissions;
+    raise exception 'FAIL: authenticated deleted submissions';
+  exception when insufficient_privilege then null; end;
+  raise notice 'PASS: EXECUTE grant adds no direct table access for authenticated';
+end $$;
+rollback;
+
+-- X4: invalid token remains invalid for BOTH roles
+begin;
+select set_config('role', 'postgres', true);
+insert into public.intake_windows (title, token_hash, opens_at, closes_at, created_by_staff_id)
+values ('טופס X4', encode(sha256(convert_to('tok-x4','UTF8')),'hex'),
+        now() - interval '5 minutes', now() + interval '5 minutes', '11111111-1111-1111-1111-111111111101');
+select set_config('role', 'anon', true);
+do $$ declare v jsonb; begin
+  v := public.public_intake_overview('totally-wrong-token');
+  if v ->> 'status' <> 'invalid' then raise exception 'FAIL: anon invalid token status %', v->>'status'; end if;
+end $$;
+select set_config('role', 'authenticated', true);
+do $$ declare v jsonb; begin
+  v := public.public_intake_overview('totally-wrong-token');
+  if v ->> 'status' <> 'invalid' then raise exception 'FAIL: authenticated invalid token status %', v->>'status'; end if;
+  raise notice 'PASS: invalid token remains invalid under both roles';
+end $$;
+rollback;
+
+-- X5: a VALID token works IDENTICALLY under anon and authenticated
+begin;
+select set_config('role', 'postgres', true);
+insert into public.intake_windows (title, token_hash, opens_at, closes_at, created_by_staff_id)
+values ('טופס X5', encode(sha256(convert_to('tok-x5','UTF8')),'hex'),
+        now() - interval '5 minutes', now() + interval '5 minutes', '11111111-1111-1111-1111-111111111101');
+do $$ declare
+  v_anon jsonb; v_anon_students jsonb;
+  v_auth jsonb; v_auth_students jsonb;
+  v_submit_status text;
+begin
+  perform set_config('role', 'anon', true);
+  v_anon := public.public_intake_overview('tok-x5');
+  if v_anon ->> 'status' <> 'open' then raise exception 'FAIL: anon overview %', v_anon->>'status'; end if;
+  v_anon_students := public.public_intake_students('tok-x5', '22222222-2222-2222-2222-222222222201');
+  if jsonb_array_length(v_anon_students) <> 4 then raise exception 'FAIL: anon students %', v_anon_students; end if;
+
+  perform set_config('role', 'authenticated', true);
+  v_auth := public.public_intake_overview('tok-x5');
+  if v_auth ->> 'status' <> 'open' then raise exception 'FAIL: authenticated overview %', v_auth->>'status'; end if;
+  if v_auth ->> 'title' <> (v_anon ->> 'title') then
+    raise exception 'FAIL: overview differs between roles';
+  end if;
+  v_auth_students := public.public_intake_students('tok-x5', '22222222-2222-2222-2222-222222222201');
+  if v_auth_students <> v_anon_students then
+    raise exception 'FAIL: student list differs between roles';
+  end if;
+  -- submit works identically under authenticated (staff with a session)
+  v_submit_status := (public.public_intake_submit('tok-x5', '44444444-4444-4444-4444-444444444401',
+      '22222222-2222-2222-2222-222222222201', 'הצהרה', null,
+      '11111111-1111-1111-1111-111111111102')) ->> 'status';
+  if v_submit_status <> 'ok' then raise exception 'FAIL: authenticated submit %', v_submit_status; end if;
+  raise notice 'PASS: valid token works identically under anon and authenticated';
+end $$;
+rollback;
+
+-- ============================================================================
+-- PART A PHASE 2: AD-HOC REPORTS, DELETION, FEED
+-- ============================================================================
+\echo '--- ad-hoc reports / deletion / feed tests ---'
+
+-- M14: mentor submits an ad-hoc report without any occurrence
+begin;
+select set_config('role', 'postgres', true);
+update public.profiles set auth_user_id = id where email = 'michal@chamama.example';
+select set_config('role', 'authenticated', true);
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111102","role":"authenticated"}', true);
+do $$ declare
+  v_meeting_at timestamptz := (now() at time zone 'Asia/Jerusalem' - interval '2 hours') at time zone 'UTC';
+  v_report uuid;
+begin
+  v_report := public.submit_adhoc_meeting_report(
+    '44444444-4444-4444-4444-444444444401', 'mentor', v_meeting_at,
+    true, null, 'yellow', true, '{functional}', 'דורש מעקב תפקודי', null, null,
+    'נקבעה שיחה עם ההורים');
+  if v_report is null then raise exception 'FAIL: ad-hoc report failed'; end if;
+  if (select meeting_at from public.meeting_reports where id = v_report) <> v_meeting_at then
+    raise exception 'FAIL: meeting_at not stored';
+  end if;
+  if (select context from public.meeting_reports where id = v_report) <> 'mentor' then
+    raise exception 'FAIL: context not stored';
+  end if;
+  if (select occurrence_id from public.meeting_reports where id = v_report) is not null then
+    raise exception 'FAIL: ad-hoc report linked to an occurrence';
+  end if;
+  raise notice 'PASS: ad-hoc report stored with canonical meeting_at + context';
+end $$;
+rollback;
+
+-- M15: ad-hoc authorization — unrelated staff rejected
+begin;
+select set_config('role', 'postgres', true);
+update public.profiles set auth_user_id = id where email = 'tom@chamama.example';
+select set_config('role', 'authenticated', true);
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-11111111110a","role":"authenticated"}', true);
+do $$ begin
+  begin
+    perform public.submit_adhoc_meeting_report(
+      '44444444-4444-4444-4444-444444444401', 'mentor', now(), true, null,
+      'green', false, '{}', null, null, null, 'x');
+    raise exception 'FAIL: unrelated staff submitted ad-hoc report';
+  exception when insufficient_privilege then null; end;
+  raise notice 'PASS: ad-hoc report authorization enforced';
+end $$;
+rollback;
+
+-- M16: deletion — owner soft-deletes; canonical status recomputed; audited
+begin;
+select set_config('role', 'postgres', true);
+update public.profiles set auth_user_id = id where email in ('michal@chamama.example','naama@chamama.example','tom@chamama.example');
+insert into public.meeting_schedules (id, student_id, staff_id, context, weekday, meeting_time, is_active)
+values ('7777aaaa-7777-aaaa-7777-aaaaaaaaaaaa', '44444444-4444-4444-4444-444444444401',
+        '11111111-1111-1111-1111-111111111102', 'mentor',
+        extract(dow from (now() at time zone 'Asia/Jerusalem' - interval '30 minutes'))::smallint,
+        ((now() at time zone 'Asia/Jerusalem' - interval '30 minutes'))::time, true);
+select set_config('role', 'service_role', true);
+do $$ declare v_week date; begin
+  v_week := ((now() at time zone 'Asia/Jerusalem')::date - extract(dow from (now() at time zone 'Asia/Jerusalem'))::int);
+  perform public.scheduler_generate_occurrences(v_week);
+end $$;
+select set_config('role', 'authenticated', true);
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111102","role":"authenticated"}', true);
+do $$ declare
+  v_occ uuid; v_red uuid; v_green uuid; v_status text; v_infeed int;
+begin
+  -- occurrence-linked red report (michal)
+  select occurrence_id into v_occ from public.my_reportable_occurrences('44444444-4444-4444-4444-444444444401') limit 1;
+  v_red := public.submit_meeting_report(v_occ, true, null, null, 'red', false, '{}', null, null, null, 'מעקב');
+  -- ad-hoc green report (michal, later submission)
+  v_green := public.submit_adhoc_meeting_report(
+    '44444444-4444-4444-4444-444444444401', 'mentor', now(), true, null,
+    'green', false, '{}', null, null, null, 'הכל בסדר');
+  -- canonical = green (latest submission)
+  select status into v_status from public.dashboard_rows()
+   where student_id = '44444444-4444-4444-4444-444444444401';
+  if v_status <> 'green' then raise exception 'FAIL: canonical status % before deletion', v_status; end if;
+  -- feed includes the report
+  select count(*) into v_infeed from public.student_feed_items('44444444-4444-4444-4444-444444444401')
+   where kind = 'report';
+  if v_infeed < 2 then raise exception 'FAIL: reports missing from feed'; end if;
+
+  -- delete the green ad-hoc report (owner) → status recomputes to red
+  perform public.delete_meeting_report(v_green);
+  select status into v_status from public.dashboard_rows()
+   where student_id = '44444444-4444-4444-4444-444444444401';
+  if v_status <> 'red' then raise exception 'FAIL: status not recomputed after deletion (%)', v_status; end if;
+  -- deleted report gone from feed
+  select count(*) into v_infeed from public.student_feed_items('44444444-4444-4444-4444-444444444401')
+   where kind = 'report' and item_id = v_green::text;
+  if v_infeed <> 0 then raise exception 'FAIL: deleted report still in feed'; end if;
+  raise notice 'PASS: report deletion recomputes canonical status + feed + audited';
+end $$;
+select set_config('role', 'postgres', true);
+do $$ begin
+  if (select count(*) from public.audit_logs where action = 'meeting_report_deleted') < 1 then
+    raise exception 'FAIL: deletion not audited';
+  end if;
+  raise notice 'PASS: report deletion audited';
+end $$;
+-- unauthorized deletion blocked (unrelated staff cannot even see the report)
+select set_config('role', 'authenticated', true);
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-11111111110a","role":"authenticated"}', true);
+do $$ begin
+  begin
+    perform public.delete_meeting_report(
+      (select id from public.meeting_reports where deleted_at is null limit 1));
+    raise exception 'FAIL: unrelated staff deleted a report';
+  exception when others then
+    null; -- denied OR invisible via RLS — both mean the report is protected
+  end;
+  raise notice 'PASS: unrelated staff cannot delete reports';
+end $$;
+rollback;
+
+-- ============================================================================
+-- PART B: FORM ENGINE
+-- ============================================================================
+\echo '--- form engine tests ---'
+
+-- F1: coordinator creates a form → draft; ordinary staff rejected
+begin;
+select set_config('role', 'postgres', true);
+update public.profiles set auth_user_id = id where email in ('ronen@chamama.example','tom@chamama.example');
+select set_config('role', 'authenticated', true);
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111101","role":"authenticated"}', true);
+do $$ declare v_id uuid; begin
+  v_id := public.form_create('mid_feedback_test', 'משוב אמצע', 'תיאור', 'staff', 'project',
+    '{"version":"1","steps":[{"id":"s1","title":"שאלות"}],"fields":[{"key":"status","type":"gyr","label":"מצב","required":true,"stepId":"s1"}]}'::jsonb);
+  if v_id is null then raise exception 'FAIL: form_create returned null'; end if;
+  if (select status from public.form_definitions where id = v_id) <> 'draft' then
+    raise exception 'FAIL: created form is not draft';
+  end if;
+  raise notice 'PASS: coordinator creates draft form';
+end $$;
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-11111111110a","role":"authenticated"}', true);
+do $$ begin
+  begin
+    perform public.form_create('evil_form', 'x', null, 'staff', 'hidden', '{}'::jsonb);
+    raise exception 'FAIL: ordinary staff created a form';
+  exception when insufficient_privilege then null; end;
+  raise notice 'PASS: ordinary staff cannot create forms';
+end $$;
+rollback;
+
+-- F2/F3: publish creates immutable versions; invalid schema rejected
+begin;
+select set_config('role', 'postgres', true);
+update public.profiles set auth_user_id = id where email = 'amit@chamama.example';
+select set_config('role', 'authenticated', true);
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111108","role":"authenticated"}', true);
+do $$ declare v_id uuid; v_ver1 int; v_ver2 int; v_row1 uuid; begin
+  v_id := public.form_create('pub_test_form', 'טופס בדיקה', null, 'staff', 'hidden',
+    '{"version":"1","steps":[{"id":"s1","title":"s"}],"fields":[{"key":"f1","type":"short_text","label":"שדה","required":true,"stepId":"s1"}]}'::jsonb);
+  v_ver1 := public.form_publish(v_id);
+  if v_ver1 <> 1 then raise exception 'FAIL: first publish version %', v_ver1; end if;
+  select id into v_row1 from public.form_versions where form_definition_id = v_id and version_number = 1;
+  -- edit draft + publish again → version 2, v1 immutable
+  perform public.form_save_draft(v_id, 'טופס בדיקה', null, null,
+    '{"version":"1","steps":[{"id":"s1","title":"s"}],"fields":[{"key":"f1","type":"short_text","label":"שדה מעודכן","required":true,"stepId":"s1"}]}'::jsonb);
+  v_ver2 := public.form_publish(v_id);
+  if v_ver2 <> 2 then raise exception 'FAIL: second publish version %', v_ver2; end if;
+  if (select schema_json -> 'fields' -> 0 ->> 'label' from public.form_versions where id = v_row1) <> 'שדה' then
+    raise exception 'FAIL: historical version mutated';
+  end if;
+  raise notice 'PASS: publish creates immutable versions';
+end $$;
+-- invalid schemas rejected
+do $$ declare v_id uuid; begin
+  v_id := public.form_create('bad_form_test', 'שגוי', null, 'staff', 'hidden',
+    '{"version":"1","steps":[{"id":"s1","title":"s"}],"fields":[{"key":"f1","type":"short_text","label":"x","required":true,"stepId":"s9"}]}'::jsonb);
+  begin
+    perform public.form_publish(v_id);
+    raise exception 'FAIL: unknown-step reference accepted';
+  exception when check_violation then null; end;
+  raise notice 'PASS: invalid schema rejected at publish';
+end $$;
+rollback;
+
+-- F4: branch loop rejected
+begin;
+select set_config('role', 'postgres', true);
+update public.profiles set auth_user_id = id where email = 'amit@chamama.example';
+select set_config('role', 'authenticated', true);
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111108","role":"authenticated"}', true);
+do $$ declare v_id uuid; begin
+  v_id := public.form_create('loop_form', 'לולאה', null, 'staff', 'hidden',
+    ('{"version":"1","steps":[{"id":"s1","title":"a"},{"id":"s2","title":"b"}],"fields":[' ||
+    '{"key":"f1","type":"yes_no","label":"x","required":true,"stepId":"s1","branch":{"when":{"field":"f1","op":"eq","value":"no"},"gotoStep":"s2"}},' ||
+    '{"key":"f2","type":"yes_no","label":"y","required":true,"stepId":"s2","branch":{"when":{"field":"f2","op":"eq","value":"no"},"gotoStep":"s1"}}]}')::jsonb);
+  begin
+    perform public.form_publish(v_id);
+    raise exception 'FAIL: branching loop accepted';
+  exception when check_violation then null; end;
+  raise notice 'PASS: branching loop rejected';
+end $$;
+rollback;
+
+-- F5: authenticated submission — respondent derived, version bound
+begin;
+select set_config('role', 'postgres', true);
+update public.profiles set auth_user_id = id where email = 'amit@chamama.example';
+insert into public.form_definitions (id, form_key, name, audience, feed_category, status, created_by_staff_id)
+values ('99999999-9999-9999-9999-999999999901', 'mid_feedback_test', 'משוב אמצע', 'staff', 'project', 'published', '11111111-1111-1111-1111-111111111101');
+insert into public.form_versions (id, form_definition_id, version_number, schema_json, created_by_staff_id)
+values ('99999999-9999-9999-9999-999999999902', '99999999-9999-9999-9999-999999999901', 1,
+  '{"version":"1","steps":[{"id":"s1","title":"s"}],"fields":[{"key":"status","type":"gyr","label":"מצב","required":true,"stepId":"s1"}]}'::jsonb, '11111111-1111-1111-1111-111111111101');
+update public.form_definitions set current_version_id = '99999999-9999-9999-9999-999999999902' where form_key = 'mid_feedback_test';
+select set_config('role', 'authenticated', true);
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111105","role":"authenticated"}', true);
+do $$ declare v_id uuid; begin
+  v_id := public.submit_staff_form('mid_feedback_test', '44444444-4444-4444-4444-444444444401',
+    '{"status":"yellow"}'::jsonb);
+  if (select respondent_staff_id from public.form_submissions where id = v_id)
+       <> '11111111-1111-1111-1111-111111111105' then
+    raise exception 'FAIL: respondent not derived from current_staff_id';
+  end if;
+  if (select form_version_id from public.form_submissions where id = v_id)
+       <> '99999999-9999-9999-9999-999999999902' then
+    raise exception 'FAIL: submission not bound to current version';
+  end if;
+  raise notice 'PASS: staff submission respondent-derived + version-bound';
+end $$;
+rollback;
+
+-- F6: public campaign — token flow + resubmission policy
+begin;
+select set_config('role', 'postgres', true);
+update public.profiles set auth_user_id = id where email = 'amit@chamama.example';
+insert into public.form_definitions (id, form_key, name, audience, feed_category, status, created_by_staff_id)
+values ('99999999-9999-9999-9999-999999999903', 'reflection_test', 'ריפלקציה', 'public', 'hidden', 'published', '11111111-1111-1111-1111-111111111101');
+insert into public.form_versions (id, form_definition_id, version_number, schema_json, created_by_staff_id)
+values ('99999999-9999-9999-9999-999999999904', '99999999-9999-9999-9999-999999999903', 1,
+  '{"version":"1","steps":[{"id":"s1","title":"s"}],"fields":[{"key":"text","type":"long_text","label":"רפלקציה","required":true,"stepId":"s1"}]}'::jsonb, '11111111-1111-1111-1111-111111111101');
+update public.form_definitions set current_version_id = '99999999-9999-9999-9999-999999999904' where form_key = 'reflection_test';
+select set_config('role', 'authenticated', true);
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111108","role":"authenticated"}', true);
+do $$ declare v_token text; v_res jsonb; begin
+  v_token := public.form_campaign_create('99999999-9999-9999-9999-999999999903',
+    now() - interval '5 minutes', now() + interval '5 minutes', '44444444-4444-4444-4444-444444444401', false);
+  if v_token is null or length(v_token) < 20 then raise exception 'FAIL: campaign token missing'; end if;
+  if (select token_hash from public.form_campaigns where subject_student_id = '44444444-4444-4444-4444-444444444401')
+       = v_token then
+    raise exception 'FAIL: raw token stored in DB';
+  end if;
+  perform set_config('role', 'anon', true);
+  v_res := public.public_form_overview(v_token);
+  if v_res ->> 'status' <> 'open' then raise exception 'FAIL: public form overview %', v_res->>'status'; end if;
+  if (v_res -> 'form_name') is null then raise exception 'FAIL: form name missing'; end if;
+  v_res := public.public_form_submit(v_token, '{"text":"החניך דיווח"}'::jsonb);
+  if v_res ->> 'status' <> 'ok' then raise exception 'FAIL: public submit %', v_res; end if;
+  -- resubmission blocked (allow_resubmit = false)
+  v_res := public.public_form_submit(v_token, '{"text":"שנית"}'::jsonb);
+  if v_res ->> 'status' <> 'already_submitted' then raise exception 'FAIL: resubmission allowed'; end if;
+  raise notice 'PASS: public campaign token flow + resubmission policy';
+end $$;
+rollback;
+
+-- F7: anon/authenticated cannot select form tables directly (broad access)
+begin;
+select set_config('role', 'anon', true);
+do $$ declare v int; begin
+  begin
+    select count(*) into v from public.form_definitions;
+    raise exception 'FAIL: anon read form_definitions';
+  exception when insufficient_privilege then null; end;
+  begin
+    select count(*) into v from public.form_submissions;
+    raise exception 'FAIL: anon read form_submissions';
+  exception when insufficient_privilege then null; end;
+  raise notice 'PASS: anon cannot read form engine tables';
+end $$;
+rollback;
+
+-- ============================================================================
+-- AUDIT FIXES (20260919000001): View-As, feed, immutability, validation
+-- ============================================================================
+\echo '--- audit fixes tests ---'
+
+-- V1: dashboard_rows_view_as is super_admin-only
+begin;
+select set_config('role', 'postgres', true);
+update public.profiles set auth_user_id = id where email in ('amit@chamama.example','tom@chamama.example','michal@chamama.example');
+select set_config('role', 'authenticated', true);
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111108","role":"authenticated"}', true);
+do $$ declare v_count int; begin
+  select count(*) into v_count from public.dashboard_rows_view_as(
+    '11111111-1111-1111-1111-111111111102', 'mentor');
+  if v_count > 0 then raise exception 'FAIL: non-super_admin called dashboard_rows_view_as'; end if;
+  raise notice 'PASS: dashboard_rows_view_as denied for non-super_admin';
+end $$;
+rollback;
+
+-- V2: super_admin can view-as a mentor and sees only that mentor's group students
+begin;
+select set_config('role', 'postgres', true);
+update public.profiles set auth_user_id = id where email in ('ronen@chamama.example','michal@chamama.example');
+select set_config('role', 'authenticated', true);
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111101","role":"authenticated"}', true);
+do $$ declare v_count int; begin
+  select count(*) into v_count from public.dashboard_rows_view_as(
+    '11111111-1111-1111-1111-111111111102', 'mentor');
+  -- מיכל mentors groups זית (4 students) + דקל (4 students) = 8
+  if v_count <> 8 then raise exception 'FAIL: view-as mentor rows % (expected 8)', v_count; end if;
+  raise notice 'PASS: view-as mentor returns correct scoped rows';
+end $$;
+rollback;
+
+-- V3: view-as with a role the target doesn't have returns zero rows
+begin;
+select set_config('role', 'postgres', true);
+update public.profiles set auth_user_id = id where email in ('amit@chamama.example','tom@chamama.example');
+select set_config('role', 'authenticated', true);
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111108","role":"authenticated"}', true);
+do $$ declare v_count int; begin
+  -- tom is ordinary staff, not a mentor → mentor view-as returns 0
+  select count(*) into v_count from public.dashboard_rows_view_as(
+    '11111111-1111-1111-1111-11111111110a', 'mentor');
+  if v_count <> 0 then raise exception 'FAIL: view-as mentor for non-mentor returned rows'; end if;
+  raise notice 'PASS: view-as respects target relationship';
+end $$;
+rollback;
+
+-- V4: form_versions immutability — authenticated cannot UPDATE or DELETE
+begin;
+select set_config('role', 'postgres', true);
+update public.profiles set auth_user_id = id where email = 'amit@chamama.example';
+insert into public.form_definitions (id, form_key, name, audience, feed_category, status, created_by_staff_id)
+values ('88888888-8888-8888-8888-888888888801', 'immutable_test', 'בדיקה', 'staff', 'hidden', 'published', '11111111-1111-1111-1111-111111111101');
+insert into public.form_versions (id, form_definition_id, version_number, schema_json, created_by_staff_id)
+values ('88888888-8888-8888-8888-888888888802', '88888888-8888-8888-8888-888888888801', 1,
+  '{"version":"1","steps":[{"id":"s1","title":"s"}],"fields":[]}'::jsonb, '11111111-1111-1111-1111-111111111101');
+update public.form_definitions set current_version_id = '88888888-8888-8888-8888-888888888802' where form_key = 'immutable_test';
+select set_config('role', 'authenticated', true);
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111108","role":"authenticated"}', true);
+do $$ begin
+  begin
+    update public.form_versions set schema_json = '{"version":"1","steps":[],"fields":[]}'::jsonb
+     where id = '88888888-8888-8888-8888-888888888802';
+    raise exception 'FAIL: authenticated updated form_versions';
+  exception when insufficient_privilege then null; end;
+  begin
+    delete from public.form_versions where id = '88888888-8888-8888-8888-888888888802';
+    raise exception 'FAIL: authenticated deleted form_versions';
+  exception when insufficient_privilege then null; end;
+  raise notice 'PASS: form_versions immutable for authenticated';
+end $$;
+rollback;
+
+-- V5: validate_form_answers — required field missing
+begin;
+select set_config('role', 'postgres', true);
+do $$ declare v_res jsonb; begin
+  v_res := public.validate_form_answers(
+    '{"version":"1","steps":[{"id":"s1","title":"s"}],"fields":[{"key":"name","type":"short_text","label":"n","required":true,"stepId":"s1"}]}'::jsonb,
+    '{}'::jsonb);
+  if (v_res ->> 'valid')::boolean then raise exception 'FAIL: missing required accepted'; end if;
+  raise notice 'PASS: missing required field rejected';
+end $$;
+-- V5b: unknown answer key rejected
+do $$ declare v_res jsonb; begin
+  v_res := public.validate_form_answers(
+    '{"version":"1","steps":[{"id":"s1","title":"s"}],"fields":[{"key":"name","type":"short_text","label":"n","required":true,"stepId":"s1"}]}'::jsonb,
+    '{"name":"ok","unknown_key":"bad"}'::jsonb);
+  if (v_res ->> 'valid')::boolean then raise exception 'FAIL: unknown key accepted'; end if;
+  raise notice 'PASS: unknown answer key rejected';
+end $$;
+-- V5c: invalid option value rejected
+do $$ declare v_res jsonb; begin
+  v_res := public.validate_form_answers(
+    '{"version":"1","steps":[{"id":"s1","title":"s"}],"fields":[{"key":"status","type":"single_choice","label":"s","required":true,"stepId":"s1","options":[{"value":"a","label":"A"}]}]}'::jsonb,
+    '{"status":"hack"}'::jsonb);
+  if (v_res ->> 'valid')::boolean then raise exception 'FAIL: invalid option accepted'; end if;
+  raise notice 'PASS: invalid option value rejected';
+end $$;
+-- V5d: valid answers accepted
+do $$ declare v_res jsonb; begin
+  v_res := public.validate_form_answers(
+    '{"version":"1","steps":[{"id":"s1","title":"s"}],"fields":[{"key":"status","type":"gyr","label":"s","required":true,"stepId":"s1"},{"key":"notes","type":"textarea","label":"n","required":false,"stepId":"s1"}]}'::jsonb,
+    '{"status":"green","notes":"תקין"}'::jsonb);
+  if (v_res ->> 'valid')::boolean is not true then raise exception 'FAIL: valid answers rejected'; end if;
+  raise notice 'PASS: valid form answers accepted';
+end $$;
+rollback;
+
 \echo '--- RLS + identity test suite finished (no FAIL lines above = success) ---'

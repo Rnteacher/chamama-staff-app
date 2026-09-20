@@ -19,6 +19,7 @@ import {
 import { isUuid } from "@/lib/validation";
 import type { ActionState } from "@/lib/actions/messages";
 import { parseCsv } from "@/lib/csv";
+import { assertNotViewAs } from "@/lib/view-as";
 
 type Admin = Awaited<ReturnType<typeof createAdminClient>>;
 
@@ -28,6 +29,9 @@ async function withAdmin(
   try {
     const me = await requireSuperAdmin();
     if (!me.staffId) return { ok: false, error: "אין זהות צוות מקושרת" };
+    if (!(await assertNotViewAs())) {
+      return { ok: false, error: "פעולות שינוי לא זמינות במצב צפייה" };
+    }
     const admin = createAdminClient();
     return await fn(admin, me.staffId);
   } catch (e) {

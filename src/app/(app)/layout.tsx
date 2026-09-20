@@ -3,7 +3,9 @@ import Link from "next/link";
 import BottomNav from "@/components/BottomNav";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import PushBanner from "@/components/PushBanner";
+import ViewAsBanner from "@/components/view-as/ViewAsBanner";
 import { requireMe } from "@/lib/auth";
+import { getViewAsState } from "@/lib/view-as";
 import { createClient } from "@/lib/supabase/server";
 import { APP_NAME } from "@/lib/constants";
 
@@ -24,10 +26,14 @@ export default async function AppLayout({
 
   const isAdmin =
     me.roles.includes("super_admin") || me.roles.includes("project_coordinator");
+  const viewAs = await getViewAsState();
 
   return (
     <div className="flex min-h-dvh flex-col">
       <ServiceWorkerRegister />
+      {viewAs.active && (
+        <ViewAsBanner staffName={viewAs.staffName ?? ""} roleContext={viewAs.roleContext ?? ""} />
+      )}
       <header className="sticky top-0 z-20 border-b border-line bg-surface/95 backdrop-blur">
         <div className="mx-auto flex h-14 w-full max-w-3xl items-center justify-between px-4">
           <Link href="/" className="flex items-center gap-2.5" aria-label={APP_NAME}>

@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
 import { createClient } from "@/lib/supabase/server";
 import { APP_NAME } from "@/lib/constants";
-import { resolveIntakeState } from "@/lib/intake-token";
+import {
+  fetchIntakeMasters,
+  fetchIntakeOverview,
+  fetchIntakeMajors,
+} from "@/lib/intake-server";
 import IntakeWizard from "@/components/intake/IntakeWizard";
 
 export const metadata: Metadata = {
@@ -9,31 +13,31 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
+// token-specific public page: never cache a transient RPC failure
+export const dynamic = "force-dynamic";
+
 export default async function IntakePage({
   params,
 }: PageProps<"/intake/[token]">) {
   const { token } = await params;
   const supabase = await createClient();
-  const { data } = await supabase.rpc("public_intake_overview", {
-    p_token: token,
-  });
-  const overview = resolveIntakeState(data);
+  const overview = await fetchIntakeOverview(supabase, token);
 
   let body: React.ReactNode;
 
   if (overview.status === "open") {
     // pre-fetch majors + masters (minimal public fields, token-gated RPCs)
-    const [majorsRes, mastersRes] = await Promise.all([
-      supabase.rpc("public_intake_majors", { p_token: token }),
-      supabase.rpc("public_intake_masters", { p_token: token }),
+    const [majors, masters] = await Promise.all([
+      fetchIntakeMajors(supabase, token),
+      fetchIntakeMasters(supabase, token),
     ]);
     body = (
       <IntakeWizard
         token={token}
         title={overview.title ?? "הצהרת כוונות לפרויקט"}
         groups={overview.groups ?? []}
-        majors={(majorsRes.data ?? []) as { id: string; name: string }[]}
-        masters={(mastersRes.data ?? []) as { id: string; name: string }[]}
+        majors={majors}
+        masters={masters}
       />
     );
   } else if (overview.status === "not_open") {

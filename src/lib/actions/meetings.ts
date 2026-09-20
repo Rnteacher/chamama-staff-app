@@ -5,6 +5,7 @@ import { z } from "zod";
 import { requireMe } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { isValidTime, schoolWeekStart } from "@/lib/meetings";
+import { assertNotViewAs } from "@/lib/view-as";
 
 function err(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
@@ -38,6 +39,9 @@ export async function upsertMeetingScheduleAction(
     return { ok: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
   }
   await requireMe();
+  if (!(await assertNotViewAs())) {
+    return { ok: false, error: "לא זמין במצב צפייה" };
+  }
   const supabase = await createClient();
   const { error } = await supabase.rpc("upsert_meeting_schedule", {
     p_student_id: parsed.data.studentId,
@@ -76,6 +80,9 @@ export async function submitMeetingReportAction(
     return { ok: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
   }
   await requireMe();
+  if (!(await assertNotViewAs())) {
+    return { ok: false, error: "לא זמין במצב צפייה" };
+  }
   const supabase = await createClient();
 
   // client-side same-week guard (server enforces again in the RPC)
