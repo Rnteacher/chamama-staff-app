@@ -7,6 +7,65 @@ import { createClient } from "@/lib/supabase/server";
 import { isValidTime, schoolWeekStart, jerusalemWallTimeToUtc } from "@/lib/meetings";
 import { assertNotViewAs } from "@/lib/view-as";
 
+const updateReportSchema = z.object({
+  reportId: z.string().uuid(),
+  meetingAtLocal: z.string().min(1, "הזינו תאריך ושעה"),
+  held: z.boolean(),
+  notHeldReason: z.string().trim().max(500).optional().or(z.literal("")),
+  status: z.enum(["green", "yellow", "red"]),
+  intervention: z.boolean(),
+  categories: z.array(z.enum(["functional", "emotional", "other"])),
+  detailFunctional: z.string().trim().max(1000).optional().or(z.literal("")),
+  detailEmotional: z.string().trim().max(1000).optional().or(z.literal("")),
+  detailOther: z.string().trim().max(1000).optional().or(z.literal("")),
+  nextSteps: z.string().trim().max(2000).optional().or(z.literal("")),
+});
+
+export async function updateMeetingReportAction(
+  input: z.input<typeof updateReportSchema>
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const parsed = updateReportSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
+  }
+  await requireMe();
+  if (!(await assertNotViewAs())) {
+    return { ok: false, error: "לא זמין במצב צפייה" };
+  }
+  const d = parsed.data;
+  const [datePart, timePart] = d.meetingAtLocal.split("T");
+  if (!datePart || !timePart) return { ok: false, error: "מועד לא תקין" };
+  const [y, mo, da] = datePart.split("-").map(Number);
+  const [hh, mi] = timePart.split(":").map(Number);
+  const meetingAtIso = jerusalemWallTimeToUtc(y, mo, da, hh, mi).toISOString();
+
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("update_meeting_report", {
+    p_report_id: d.reportId,
+    p_meeting_at: meetingAtIso,
+    p_held: d.held,
+    p_not_held_reason: d.held ? null : d.notHeldReason || null,
+    p_status: d.status,
+    p_intervention: d.intervention,
+    p_categories: d.intervention ? d.categories : [],
+    p_detail_functional: d.intervention && d.categories.includes("functional") ? d.detailFunctional || null : null,
+    p_detail_emotional: d.intervention && d.categories.includes("emotional") ? d.detailEmotional || null : null,
+    p_detail_other: d.intervention && d.categories.includes("other") ? d.detailOther || null : null,
+    p_next_steps: d.nextSteps || null,
+  });
+  if (error) {
+    const msg = error.message;
+    if (msg.includes("Only the reporter")) return { ok: false, error: "רק מחבר הדוח רשאי לערוך אותו" };
+    if (msg.includes("Invalid meeting time")) return { ok: false, error: "מועד הפגישה אינו תקין" };
+    if (msg.includes("A reason is required")) return { ok: false, error: "נדרשת סיבה כשהפגישה לא התקיימה" };
+    if (msg.includes("Next steps are required")) return { ok: false, error: "נדרש לרשום את מה שהוחלט" };
+    if (msg.includes("Select at least one")) return { ok: false, error: "בחרו לפחות תחום התערבות אחד" };
+    if (msg.includes("detail is required")) return { ok: false, error: "נדרש פירוט לכל תחום שנבחר" };
+    return { ok: false, error: "העריכה נכשלה. נסו שוב." };
+  }
+  return { ok: true };
+}
+
 const ADHOC_SCHEMA = z.object({
   studentId: z.string().uuid(),
   context: z.enum(["mentor", "master"]),
