@@ -52,7 +52,6 @@ describe("public_intake_overview (server helper)", () => {
     expect(rpc).toHaveBeenCalledWith("public_intake_overview", {
       p_token: TOKEN, // exact raw token, exact parameter name
     });
-    expect(rpc.mock.calls[0][1].p_token).toBe(TOKEN); // byte-for-byte
   });
 
   it("B: RPC error (data=null) resolves ERROR — never 'invalid'", async () => {
@@ -159,9 +158,14 @@ describe("public_intake_submit argument shape", () => {
       majorId: "33333333-3333-3333-3333-333333333301",
       masterStaffId: MASTER,
     });
-    expect(rpc.mock.calls[0][1].p_major_id).toBe(
-      "33333333-3333-3333-3333-333333333301"
-    );
+    expect(rpc).toHaveBeenCalledWith("public_intake_submit", {
+      p_token: TOKEN,
+      p_student_id: STUDENT,
+      p_group_id: GROUP,
+      p_intent: "כוונה",
+      p_major_id: "33333333-3333-3333-3333-333333333301",
+      p_master_staff_id: MASTER,
+    });
   });
 
   it("surfaces DB-side status/message (not_open) without throwing", async () => {
