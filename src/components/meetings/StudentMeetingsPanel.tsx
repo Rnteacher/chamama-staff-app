@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import ConversationalForm, { type Question, type Answers } from "@/components/conversational/ConversationalForm";
-import { upsertMeetingScheduleAction, submitMeetingReportAction } from "@/lib/actions/meetings";
-import { WEEKDAY_SHORT_LABELS, WEEKDAY_LABELS, schoolWeekStart, isValidTime } from "@/lib/meetings";
+import { upsertMeetingScheduleAction, submitMeetingReportAction, submitAdhocMeetingReportAction } from "@/lib/actions/meetings";
+import { WEEKDAY_SHORT_LABELS, WEEKDAY_LABELS, schoolWeekStart, isValidTime, jerusalemWallTimeToUtc, jerusalemParts } from "@/lib/meetings";
 
 export interface ScheduleRow {
   id: string;
@@ -55,7 +55,9 @@ export default function StudentMeetingsPanel({
   );
 
   const activeSchedules = schedules.filter((s) => s.isActive);
-  const canReport = reportable.length > 0;
+  // Authorized mentor/master can ALWAYS report — ad-hoc or scheduled
+  const canReport = allowedContexts.length > 0;
+  const hasScheduledOccurrences = reportable.length > 0;
   const reportTarget =
     reportable.find((r) => r.occurrenceId === reportOccurrenceId) ?? reportable[0] ?? null;
 
@@ -78,13 +80,11 @@ export default function StudentMeetingsPanel({
           )}
           <button
             type="button"
-            disabled={!canReport}
             onClick={() => {
               setReportOccurrenceId(reportTarget?.occurrenceId ?? null);
               setReportOpen(true);
             }}
-            className="rounded-full bg-brand px-4 py-2 text-sm font-extrabold text-ink disabled:opacity-50"
-            title={canReport ? undefined : "אין פגישה שטרם דווחה"}
+            className="rounded-full bg-brand px-4 py-2 text-sm font-extrabold text-ink"
           >
             דיווח פגישה
           </button>
@@ -123,12 +123,6 @@ export default function StudentMeetingsPanel({
         </ul>
       )}
 
-      {!canReport && allowedContexts.length > 0 && schedules.some((s) => s.mine) && (
-        <p className="mt-2 text-xs text-muted">
-          כל הפגישות שלכם דווחו כרגע. דיווח חדש יהיה זמין בהתקרב מועד הפגישה הבאה.
-        </p>
-      )}
-
       <ScheduleDialog
         key={`${editing?.id ?? "new"}-${scheduleDialogOpen}`}
         open={scheduleDialogOpen}
@@ -138,9 +132,11 @@ export default function StudentMeetingsPanel({
         editing={editing}
       />
 
-      {reportOpen && reportTarget && (
+      {reportOpen && (
         <ReportWizard
-          occurrence={reportTarget}
+          studentId={studentId}
+          occurrence={hasScheduledOccurrences ? reportTarget : null}
+          allowedContexts={allowedContexts}
           multiple={reportable.length > 1}
           occurrences={reportable}
           onOccurrenceChange={(id) => setReportOccurrenceId(id)}
@@ -179,8 +175,6 @@ function ScheduleDialog({
   const [pending, startTransition] = useTransition();
   const dialogRef = useRef<HTMLDialogElement>(null);
 
-  // state is initialized from props on mount (the parent re-mounts this
-  // component with a key whenever the dialog opens or the target changes)
   useEffect(() => {
     if (open) {
       dialogRef.current?.showModal();
@@ -302,30 +296,83 @@ function ScheduleDialog({
 
 // ------------------------------------------------------------------ report --
 
-function ReportWizard({
-  occurrence,
-  multiple,
-  occurrences,
-  onOccurrenceChange,
-  onClose,
-}: {
-  occurrence: ReportableOccurrence;
+interface ReportWizardProps {
+  studentId: string;
+  /** null = ad-hoc mode (no scheduled occurrence) */
+  occurrence: ReportableOccurrence | null;
+  allowedContexts: ("mentor" | "master")[];
   multiple: boolean;
   occurrences: ReportableOccurrence[];
   onOccurrenceChange: (id: string) => void;
   onClose: () => void;
-}) {
-  const [answers, setAnswers] = useState<Answers>({ held: true });
+}
+
+function ReportWizard({
+  studentId,
+  occurrence,
+  allowedContexts,
+  multiple,
+  occurrences,
+  onOccurrenceChange,
+  onClose,
+}: ReportWizardProps) {
+  const isScheduled = occurrence !== null;
+  const [answers, setAnswers] = useState<Answers>(() => ({
+    held: "yes",
+    ...(allowedContexts.length === 1 ? { context: allowedContexts[0] } : {}),
+  }));
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
+  // default meeting date/time to current Asia/Jerusalem local date/time
+  const defaultMeetingAt = useMemo(() => {
+    const p = jerusalemParts(new Date());
+    return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}T${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
+  }, []);
+
   const occWeekStart = useMemo(
-    () => schoolWeekStart(new Date(occurrence.dueAt)),
-    [occurrence.dueAt]
+    () => (occurrence ? schoolWeekStart(new Date(occurrence.dueAt)) : null),
+    [occurrence?.dueAt]
   );
 
-  const questions: Question[] = useMemo(
-    () => [
+  const context = isScheduled
+    ? occurrence.context
+    : typeof answers.context === "string"
+      ? (answers.context as "mentor" | "master")
+      : allowedContexts[0] ?? "mentor";
+
+  const questions: Question[] = useMemo(() => {
+    const q: Question[] = [];
+
+    // context selection for ad-hoc when both roles exist
+    if (!isScheduled && allowedContexts.length > 1) {
+      q.push({
+        id: "context",
+        title: "באיזה תפקיד מתקיים הדיווח?",
+        type: "single-select",
+        options: allowedContexts.map((c) => ({ value: c, label: CONTEXT_LABELS[c] })),
+      });
+    }
+
+    // meeting date/time (ad-hoc only — scheduled uses occurrence time)
+    if (!isScheduled) {
+      q.push({
+        id: "meeting_at",
+        title: "מתי התקיימה הפגישה?",
+        subtitle: "תאריך ושעה",
+        type: "datetime",
+        validate: (a) => {
+          const v = a.meeting_at;
+          if (typeof v !== "string" || v === "") return "הזינו תאריך ושעה";
+          const d = new Date(v);
+          if (isNaN(d.getTime())) return "מועד לא תקין";
+          if (d.getTime() > Date.now() + 60 * 60 * 1000) return "המועד חייב להיות בעבר או בהווה";
+          return null;
+        },
+      });
+    }
+
+    q.push(
       {
         id: "held",
         title: "האם הפגישה התקיימה?",
@@ -346,8 +393,12 @@ function ReportWizard({
           typeof a.not_held_reason === "string" && a.not_held_reason.trim() !== ""
             ? null
             : "נדרשת סיבה",
-      },
-      {
+      }
+    );
+
+    // same-week reschedule only for scheduled occurrences
+    if (isScheduled) {
+      q.push({
         id: "reschedule",
         title: "מועד חדש לפגישה (אופציונלי)",
         subtitle: `ניתן לקבוע מועד חדש בתוך אותו שבוע לימודים (${WEEKDAY_SHORT_LABELS[0]}–${WEEKDAY_SHORT_LABELS[6]})`,
@@ -358,19 +409,18 @@ function ReportWizard({
           const v = a.reschedule;
           if (typeof v !== "string" || v === "") return null;
           const [datePart, timePart] = v.split("T");
-          if (!datePart || !timePart || !isValidTime(timePart)) {
-            return "מועד לא תקין";
-          }
+          if (!datePart || !timePart || !isValidTime(timePart)) return "מועד לא תקין";
           const utc = new Date(v);
-          if (schoolWeekStart(utc) !== occWeekStart) {
+          if (occWeekStart && schoolWeekStart(utc) !== occWeekStart) {
             return "המועד החדש חייב להישאר באותו שבוע לימודים";
           }
-          if (utc.getTime() <= Date.now()) {
-            return "המועד החדש חייב להיות בעתיד";
-          }
+          if (utc.getTime() <= Date.now()) return "המועד החדש חייב להיות בעתיד";
           return null;
         },
-      },
+      });
+    }
+
+    q.push(
       {
         id: "status",
         title: "מה מצב החניך/ה בפרויקט אחרי הפגישה?",
@@ -450,28 +500,63 @@ function ReportWizard({
         maxLength: 2000,
         optional: answers.held !== "yes",
       },
-    ],
-    [answers.held, occWeekStart]
-  );
+    );
+
+    return q;
+  }, [answers.held, isScheduled, allowedContexts, occWeekStart]);
 
   function submit(): Promise<void> {
     return new Promise((resolve, reject) => {
       startTransition(async () => {
-        const res = await submitMeetingReportAction({
-          occurrenceId: occurrence.occurrenceId,
-          held: answers.held === "yes",
-          notHeldReason: String(answers.not_held_reason ?? ""),
-          rescheduleLocal: String(answers.reschedule ?? ""),
-          status: String(answers.status ?? "") as "green" | "yellow" | "red",
-          intervention: answers.intervention === "yes",
-          categories: Array.isArray(answers.categories)
-            ? (answers.categories as ("functional" | "emotional" | "other")[])
-            : [],
-          detailFunctional: String(answers.detail_functional ?? ""),
-          detailEmotional: String(answers.detail_emotional ?? ""),
-          detailOther: String(answers.detail_other ?? ""),
-          nextSteps: String(answers.next_steps ?? ""),
-        });
+        const meetingAtLocal = String(answers.meeting_at ?? "");
+        let meetingAtIso: string | null = null;
+        if (!isScheduled && meetingAtLocal) {
+          const [datePart, timePart] = meetingAtLocal.split("T");
+          const [y, mo, d] = datePart.split("-").map(Number);
+          const [hh, mm] = timePart.split(":").map(Number);
+          meetingAtIso = jerusalemWallTimeToUtc(y, mo, d, hh, mm).toISOString();
+        }
+
+        const effectiveContext = isScheduled
+          ? occurrence.context
+          : (answers.context as "mentor" | "master" | undefined) ?? allowedContexts[0] ?? "mentor";
+
+        let res;
+        if (isScheduled && occurrence) {
+          res = await submitMeetingReportAction({
+            occurrenceId: occurrence.occurrenceId,
+            held: answers.held === "yes",
+            notHeldReason: String(answers.not_held_reason ?? ""),
+            rescheduleLocal: String(answers.reschedule ?? ""),
+            status: String(answers.status ?? "") as "green" | "yellow" | "red",
+            intervention: answers.intervention === "yes",
+            categories: Array.isArray(answers.categories)
+              ? (answers.categories as ("functional" | "emotional" | "other")[])
+              : [],
+            detailFunctional: String(answers.detail_functional ?? ""),
+            detailEmotional: String(answers.detail_emotional ?? ""),
+            detailOther: String(answers.detail_other ?? ""),
+            nextSteps: String(answers.next_steps ?? ""),
+          });
+        } else {
+          res = await submitAdhocMeetingReportAction({
+            studentId,
+            context: effectiveContext,
+            meetingAtLocal,
+            held: answers.held === "yes",
+            notHeldReason: String(answers.not_held_reason ?? ""),
+            status: String(answers.status ?? "") as "green" | "yellow" | "red",
+            intervention: answers.intervention === "yes",
+            categories: Array.isArray(answers.categories)
+              ? (answers.categories as ("functional" | "emotional" | "other")[])
+              : [],
+            detailFunctional: String(answers.detail_functional ?? ""),
+            detailEmotional: String(answers.detail_emotional ?? ""),
+            detailOther: String(answers.detail_other ?? ""),
+            nextSteps: String(answers.next_steps ?? ""),
+          });
+        }
+
         if (res.ok) {
           resolve();
         } else {
@@ -492,9 +577,11 @@ function ReportWizard({
       <div className="mx-auto mt-6 w-full max-w-lg pb-10">
         <div className="mb-3 flex items-center justify-between">
           <div>
-            <p className="text-sm font-bold">דיווח פגישה · {CONTEXT_LABELS[occurrence.context]}</p>
+            <p className="text-sm font-bold">
+              דיווח פגישה · {CONTEXT_LABELS[context]}
+            </p>
             <p className="text-xs text-muted">
-              {multiple ? "בחרתם את הפגישה לדיווח" : "פגישה שבועית שטרם דווחה"}
+              {isScheduled ? "פגישה שבועית שטרם דווחה" : "דיווח פגישה חדש"}
             </p>
           </div>
           <button
@@ -507,7 +594,7 @@ function ReportWizard({
           </button>
         </div>
 
-        {multiple && (
+        {isScheduled && multiple && occurrence && (
           <label className="mb-3 block rounded-2xl border border-line bg-surface p-3 text-sm">
             פגישה לדיווח
             <select
