@@ -123,7 +123,7 @@ function reset(opts: Partial<typeof state> = {}) {
 describe("Case A — recoverable window token", () => {
   beforeEach(() => reset());
 
-  it("Copy Link returns the SAME URL on repeated clicks and never mutates the DB", async () => {
+  it("Copy Link returns the SAME token on repeated clicks and never mutates the DB", async () => {
     const { encryptToken } = await import("@/lib/intake-crypto");
     const enc = encryptToken("original-raw-token");
     state.windowRow = {
@@ -136,8 +136,10 @@ describe("Case A — recoverable window token", () => {
     const r2 = await copyIntakeLinkAction(W);
     expect(r1.ok).toBe(true);
     expect(r2.ok).toBe(true);
-    expect(r1.url).toBe(r2.url);
-    expect(r1.url).toContain("original-raw-token");
+    // the action returns the raw TOKEN (the client builds the absolute URL
+    // via buildIntakePublicUrl) — identical on every call, no rotation
+    expect(r1.token).toBe(r2.token);
+    expect(r1.token).toContain("original-raw-token");
     expect(state.inserts).toHaveLength(0);
     expect(state.updates).toHaveLength(0);
     expect(state.deletes).toHaveLength(0);
@@ -185,7 +187,7 @@ describe("Case B — legacy hash-only token: additional link, never replacement"
     });
     const res = await copyIntakeLinkAction(W);
     expect(res.ok).toBe(true);
-    expect(res.url).toContain("additional-raw-token");
+    expect(res.token).toContain("additional-raw-token");
     expect(state.updates).toHaveLength(0);
   });
 

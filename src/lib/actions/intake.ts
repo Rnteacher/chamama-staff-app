@@ -1,4 +1,4 @@
-﻿"use server";
+"use server";
 
 import { revalidatePath } from "next/cache";
 import { randomBytes } from "node:crypto";
@@ -170,11 +170,13 @@ export async function assignMasterFromIntakeAction(
   }
 }
 
-/** Copy the SAME public link — decrypts the stored recoverable token.
- *  Never mutates the DB, never rotates or invalidates a token. */
+/** Copy the SAME public link — decrypts the stored recoverable token and
+ *  returns the raw token. The CLIENT builds the absolute URL from the
+ *  canonical path builder (src/lib/intake-public-path.ts) using its own
+ *  origin. Never mutates the DB, never rotates or invalidates a token. */
 export async function copyIntakeLinkAction(
   windowId: string
-): Promise<{ ok: boolean; url?: string; needsReissue?: boolean; error?: string }> {
+): Promise<{ ok: boolean; token?: string; needsReissue?: boolean; error?: string }> {
   try {
     const { allowed } = await requireCoordinator();
     if (!allowed) return { ok: false, error: "אין הרשאה" };
@@ -191,7 +193,7 @@ export async function copyIntakeLinkAction(
     if (w?.encrypted_token && w?.encryption_iv && w?.encryption_tag) {
       const { decryptToken } = await import("@/lib/intake-crypto");
       const raw = decryptToken(w.encrypted_token, w.encryption_iv, w.encryption_tag);
-      if (raw) return { ok: true, url: raw };
+      if (raw) return { ok: true, token: raw };
     }
 
     // 2) an additional recoverable token from intake_window_tokens
@@ -209,7 +211,7 @@ export async function copyIntakeLinkAction(
     if (t?.encrypted_token && t?.encryption_iv && t?.encryption_tag) {
       const { decryptToken } = await import("@/lib/intake-crypto");
       const raw = decryptToken(t.encrypted_token, t.encryption_iv, t.encryption_tag);
-      if (raw) return { ok: true, url: raw };
+      if (raw) return { ok: true, token: raw };
     }
 
     return { ok: false, needsReissue: true };

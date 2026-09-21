@@ -13,6 +13,7 @@ import {
   type IntakeCreateResult,
 } from "@/lib/actions/intake";
 import type { ActionState } from "@/lib/actions/messages";
+import { buildIntakePublicUrl } from "@/lib/intake-public-path";
 
 export interface IntakeWindowRow {
   id: string;
@@ -266,9 +267,7 @@ export default function IntakeManager({
           onClose={() => setCreateOpen(false)}
           onCreated={(token) => {
             setCreateOpen(false);
-            setCreatedLink(
-              `${window.location.origin}/intake/${token}`
-            );
+            setCreatedLink(buildIntakePublicUrl(token, window.location.origin));
           }}
         />
       )}
@@ -558,8 +557,11 @@ function CopyLinkButton({ windowId }: { windowId: string }) {
     <button type="button" disabled={pending}
       onClick={() => startTransition(async () => {
         const res = await copyIntakeLinkAction(windowId);
-        if (res.ok && res.url) {
-          await navigator.clipboard.writeText(res.url);
+        if (res.ok && res.token) {
+          // the action returns the raw token — build the COMPLETE absolute
+          // URL for the CURRENT environment (prod→prod, preview→preview, local→local)
+          const link = buildIntakePublicUrl(res.token, window.location.origin);
+          await navigator.clipboard.writeText(link);
           setCopied(true);
           setTimeout(() => setCopied(false), 2000);
         }
@@ -582,7 +584,7 @@ function ReissueButton({ windowId, onCreated }: {
       onClick={() => startTransition(async () => {
         const res = await reissueIntakeTokenAction(windowId);
         if (res.ok && res.token) {
-          onCreated(`${window.location.origin}/intake/${res.token}`);
+          onCreated(buildIntakePublicUrl(res.token, window.location.origin));
           router.refresh();
         }
       })}

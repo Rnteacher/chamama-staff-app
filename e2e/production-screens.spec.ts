@@ -86,3 +86,158 @@ test.describe("project intake admin route", () => {
     }
   });
 });
+
+// ============================================================================
+// "העתקת קישור" / "יצירת קישור נוסף" — clipboard must receive a COMPLETE
+// ABSOLUTE public intake URL (never the bare token), identical on every
+// copy, with zero DB/token rotation.
+// ============================================================================
+
+import { createCipheriv, createHash, randomBytes } from "node:crypto";
+
+test.describe("intake link copy", () => {
+  test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+
+  // mirrors src/lib/intake-crypto.ts (AES-256-GCM, hex) with the LOCAL test key
+  function encryptForTest(plaintext: string) {
+    const keyHex =
+      process.env.INTAKE_TOKEN_ENCRYPTION_KEY ??
+      "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", Buffer.from(keyHex, "hex"), iv);
+    const enc = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+    return {
+      encrypted_token: enc.toString("hex"),
+      encryption_iv: iv.toString("hex"),
+      encryption_tag: cipher.getAuthTag().toString("hex"),
+    };
+  }
+
+  async function openIntakePage(page: import("@playwright/test").Page) {
+    await login(page, USERS.admin);
+    await page.getByRole("link", { name: "ניהול" }).click();
+    await page.getByRole("link", { name: "קבלת פרויקטים" }).click();
+    await expect(page.getByText("טפסי קבלה ציבוריים")).toBeVisible();
+  }
+
+  test("העתקת קישור copies the complete absolute URL, identically, without rotating", async ({ page }) => {
+    const W = "eeeeeeee-5555-5555-5555-555555555551";
+    await admin.from("intake_windows").delete().eq("id", W);
+    const { data: staff } = await admin.from("profiles").select("id").eq("is_active", true).limit(1);
+    await admin.from("intake_windows").insert({
+      id: W,
+      title: "בדיקת העתקת קישור",
+      token_hash: "5".repeat(64),
+      opens_at: new Date(Date.now() - 3600e3).toISOString(),
+      closes_at: new Date(Date.now() + 86400e3).toISOString(),
+      is_revoked: false,
+      created_by_staff_id: staff![0]!.id,
+      ...encryptForTest("abc123-e2e-token"),
+    });
+    const { data: before } = await admin
+      .from("intake_windows")
+      .select("token_hash, updated_at, encrypted_token")
+      .eq("id", W)
+      .maybeSingle();
+
+    try {
+      await page.goto("/");
+      await openIntakePage(page);
+      const row = page.getByRole("listitem").filter({ hasText: "בדיקת העתקת קישור" });
+      const copyBtn = row.getByRole("button", { name: "העתקת קישור" });
+      await copyBtn.click();
+      await expect(row.getByText("הועתק ✓")).toBeVisible();
+
+      const copied1 = await page.evaluate(() => navigator.clipboard.readText());
+      // 1. absolute URL on the CURRENT origin
+      expect(copied1.startsWith("http://localhost:3222/")).toBe(true);
+      // 2. correct public intake route + token
+      expect(copied1).toContain("/intake/abc123-e2e-token");
+      // 3. NOT just the token
+      expect(copied1).not.toBe("abc123-e2e-token");
+      expect(copied1).toBe("http://localhost:3222/intake/abc123-e2e-token");
+
+      // 4. repeated Copy Link → exactly the same complete URL
+      await copyBtn.click();
+      await expect(row.getByText("הועתק ✓")).toBeVisible();
+      const copied2 = await page.evaluate(() => navigator.clipboard.readText());
+      expect(copied2).toBe(copied1);
+
+      // 6. no DB/token rotation
+      const { data: after } = await admin
+        .from("intake_windows")
+        .select("token_hash, updated_at, encrypted_token")
+        .eq("id", W)
+        .maybeSingle();
+      expect(after?.token_hash).toBe(before?.token_hash);
+      expect(after?.updated_at).toBe(before?.updated_at);
+      expect(after?.encrypted_token).toBe(before?.encrypted_token);
+      const { count } = await admin
+        .from("intake_window_tokens")
+        .select("id", { count: "exact", head: true })
+        .eq("intake_window_id", W);
+      expect(count).toBe(0);
+      await logout(page);
+    } finally {
+      await admin.from("intake_windows").delete().eq("id", W);
+    }
+  });
+
+  test("יצירת קישור נוסף and later העתקת קישור yield the same absolute URL; legacy link intact", async ({ page }) => {
+    const W = "eeeeeeee-6666-6666-6666-666666666661";
+    const legacyHash = createHash("sha256").update("legacy-e2e-token").digest("hex");
+    await admin.from("intake_windows").delete().eq("id", W);
+    const { data: staff } = await admin.from("profiles").select("id").eq("is_active", true).limit(1);
+    await admin.from("intake_windows").insert({
+      id: W,
+      title: "בדיקת קישור נוסף",
+      token_hash: legacyHash,
+      opens_at: new Date(Date.now() - 3600e3).toISOString(),
+      closes_at: new Date(Date.now() + 86400e3).toISOString(),
+      is_revoked: false,
+      created_by_staff_id: staff![0]!.id,
+    });
+
+    try {
+      await page.goto("/");
+      await openIntakePage(page);
+      const row = page.getByRole("listitem").filter({ hasText: "בדיקת קישור נוסף" });
+
+      // A. generate an additional link → modal shows/copies the absolute URL
+      await row.getByRole("button", { name: "יצירת קישור נוסף" }).click();
+      const modal = page.locator('div[role="dialog"][aria-label="הקישור הציבורי"]');
+      await expect(modal).toBeVisible();
+      const shown = await modal.innerText();
+      expect(shown).toContain("/intake/");
+      await modal.getByRole("button", { name: "העתקה" }).click();
+      const copiedA = await page.evaluate(() => navigator.clipboard.readText());
+      expect(copiedA.startsWith("http://localhost:3222/")).toBe(true);
+      expect(copiedA).toContain("/intake/");
+      const newToken = copiedA.split("/intake/")[1];
+      expect(newToken!.length).toBeGreaterThan(20);
+      await modal.getByRole("button", { name: "סגירה" }).click();
+
+      // B. later "העתקת קישור" → the SAME complete absolute URL
+      await row.getByRole("button", { name: "העתקת קישור" }).click();
+      await expect(row.getByText("הועתק ✓")).toBeVisible();
+      const copiedB = await page.evaluate(() => navigator.clipboard.readText());
+      expect(copiedB).toBe(copiedA);
+
+      // legacy token untouched → old link still valid
+      const { data: after } = await admin
+        .from("intake_windows")
+        .select("token_hash")
+        .eq("id", W)
+        .maybeSingle();
+      expect(after?.token_hash).toBe(legacyHash);
+      const { count } = await admin
+        .from("intake_window_tokens")
+        .select("id", { count: "exact", head: true })
+        .eq("intake_window_id", W);
+      expect(count).toBe(1);
+      await logout(page);
+    } finally {
+      await admin.from("intake_windows").delete().eq("id", W);
+    }
+  });
+});
