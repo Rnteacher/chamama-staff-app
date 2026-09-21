@@ -5,26 +5,30 @@ import { requireMe, hasRole } from "@/lib/auth";
 export const metadata = { title: "ניהול" };
 
 const tabs = [
-  { href: "/admin", label: "סקירה", superOnly: false },
-  { href: "/admin/intake", label: "קבלת פרויקטים", superOnly: false },
-  { href: "/admin/forms", label: "טפסים", superOnly: false },
-  { href: "/admin/learning-groups", label: "קבוצות למידה", superOnly: false },
-  { href: "/admin/staff", label: "סגל", superOnly: true },
-  { href: "/admin/students", label: "חניכים", superOnly: true },
-  { href: "/admin/groups", label: "קבוצות", superOnly: true },
-  { href: "/admin/majors", label: "מגמות", superOnly: true },
-  { href: "/admin/settings", label: "הגדרות", superOnly: true },
+  { href: "/admin", label: "סקירה", superOnly: false, employmentOnly: false },
+  { href: "/admin/intake", label: "קבלת פרויקטים", superOnly: false, employmentOnly: false },
+  { href: "/admin/forms", label: "טפסים", superOnly: false, employmentOnly: false },
+  { href: "/admin/learning-groups", label: "קבוצות למידה", superOnly: false, employmentOnly: false },
+  { href: "/admin/employment", label: "תעסוקה", superOnly: false, employmentOnly: true },
+  { href: "/admin/staff", label: "סגל", superOnly: true, employmentOnly: false },
+  { href: "/admin/students", label: "חניכים", superOnly: true, employmentOnly: false },
+  { href: "/admin/groups", label: "קבוצות", superOnly: true, employmentOnly: false },
+  { href: "/admin/majors", label: "מגמות", superOnly: true, employmentOnly: false },
+  { href: "/admin/settings", label: "הגדרות", superOnly: true, employmentOnly: false },
 ];
 
 export default async function AdminLayout({
   children,
 }: LayoutProps<"/admin">) {
-  // the admin shell is open to super_admin AND project coordinator;
-  // every individual page enforces its own stricter requirement.
+  // the admin shell is open to super_admin, project coordinator, leadership
+  // and employment coordinator; every individual page enforces its own
+  // stricter requirement.
   const me = await requireMe();
   const isSuper = hasRole(me, "super_admin");
   const isCoordinator = hasRole(me, "project_coordinator");
-  if (!isSuper && !isCoordinator) {
+  const canManageEmployment =
+    hasRole(me, "employment_coordinator") || hasRole(me, "leadership") || isSuper;
+  if (!isSuper && !isCoordinator && !canManageEmployment) {
     redirect("/?error=אין%20הרשאת%20מנהל");
   }
 
@@ -34,7 +38,13 @@ export default async function AdminLayout({
       <nav aria-label="תפריט ניהול">
         <ul className="flex flex-wrap gap-2">
           {tabs
-            .filter((t) => isSuper || !t.superOnly)
+            .filter((t) =>
+              t.superOnly
+                ? isSuper
+                : t.employmentOnly
+                  ? canManageEmployment
+                  : isSuper || isCoordinator
+            )
             .map((t) => (
               <li key={t.href}>
                 <Link

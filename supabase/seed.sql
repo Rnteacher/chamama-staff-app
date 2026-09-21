@@ -267,7 +267,172 @@ insert into public.learning_group_registration_window_groups (registration_windo
   ('66666666-6666-6666-6666-666666666611', '66666666-6666-6666-6666-666666666602'),
   ('66666666-6666-6666-6666-666666666611', '66666666-6666-6666-6666-666666666603');
 
--- -------------------------------------------------------------- audit -------
+-- ------------------------------------------------------- calendar events ----
+-- Fictional events for the annual calendar / daily schedule / conflict tests.
+-- Dates are relative (current_date) so dev data always lands around "today".
+delete from public.calendar_events
+ where id between '77777777-7777-7777-7777-777777777701'
+              and '77777777-7777-7777-7777-77777777770f';
+
+insert into public.calendar_events
+  (id, title, description, start_date, start_time, end_date, end_time, is_all_day, recurrence, recurrence_until, status, created_by_staff_id)
+values
+  -- one-off, timed, everyone
+  ('77777777-7777-7777-7777-777777777701', 'יום ספורט', 'תחרויות בין הקבוצות', current_date, '09:00', current_date, '13:00', false, 'none', null, 'active', '11111111-1111-1111-1111-111111111101'),
+  -- all-day tomorrow
+  ('77777777-7777-7777-7777-777777777702', 'יום צילומים', null, current_date + 1, '00:00', current_date + 1, '23:59', true, 'none', null, 'active', '11111111-1111-1111-1111-111111111101'),
+  -- multi-day: Monday-ish span relative to today (+7 → +9)
+  ('77777777-7777-7777-7777-777777777703', 'סדנה דו-יומית', 'סדנה בת שני ימים', current_date + 7, '09:00', current_date + 8, '15:00', false, 'none', null, 'active', '11111111-1111-1111-1111-111111111101'),
+  -- weekly recurring — audience: learning group צילום (Monday slot mirrors the LG slot → conflict scenario)
+  ('77777777-7777-7777-7777-777777777704', 'מפגש צילום מורחב', null, current_date + 7, '16:30', current_date + 7, '17:00', false, 'weekly', current_date + 197, 'active', '11111111-1111-1111-1111-111111111101'),
+  -- weekly recurring — staff only
+  ('77777777-7777-7777-7777-777777777705', 'ישיבת צוות שבועית', null, current_date + 7, '10:00', current_date + 7, '11:30', false, 'weekly', current_date + 197, 'active', '11111111-1111-1111-1111-111111111101'),
+  -- monthly recurring on the 1st, everyone
+  ('77777777-7777-7777-7777-777777777706', 'טקס ראש חודש', null, (date_trunc('month', current_date) + interval '1 month')::date, '08:30', (date_trunc('month', current_date) + interval '1 month')::date, '09:30', false, 'monthly', ((date_trunc('month', current_date) + interval '8 months')::date), 'active', '11111111-1111-1111-1111-111111111101'),
+  -- one-off for a home group (זית)
+  ('77777777-7777-7777-7777-777777777707', 'יום גיבוש זית', null, current_date + 3, '12:00', current_date + 3, '14:00', false, 'none', null, 'active', '11111111-1111-1111-1111-111111111101'),
+  -- one-off for a major (תקשורת)
+  ('77777777-7777-7777-7777-777777777708', 'סיור מגמת תקשורת', null, current_date + 4, '09:00', current_date + 4, '11:00', false, 'none', null, 'active', '11111111-1111-1111-1111-111111111101'),
+  -- one-off for a specific staff member (מיכל)
+  ('77777777-7777-7777-7777-777777777709', 'שיחה אישית מיכל', null, current_date + 2, '13:00', current_date + 2, '14:00', false, 'none', null, 'active', '11111111-1111-1111-1111-111111111101'),
+  -- cancelled event (must not appear anywhere)
+  ('77777777-7777-7777-7777-77777777770a', 'אירוע מבוטל', null, current_date + 5, '10:00', current_date + 5, '11:00', false, 'none', null, 'cancelled', '11111111-1111-1111-1111-111111111101');
+
+insert into public.calendar_event_audiences (event_id, audience_type, greenhouse_group_id, major_id, learning_group_id, staff_id) values
+  ('77777777-7777-7777-7777-777777777701', 'everyone', null, null, null, null),
+  ('77777777-7777-7777-7777-777777777702', 'everyone', null, null, null, null),
+  ('77777777-7777-7777-7777-777777777703', 'everyone', null, null, null, null),
+  ('77777777-7777-7777-7777-777777777704', 'learning_group', null, null, '66666666-6666-6666-6666-666666666601', null),
+  ('77777777-7777-7777-7777-777777777705', 'staff_only', null, null, null, null),
+  ('77777777-7777-7777-7777-777777777706', 'everyone', null, null, null, null),
+  ('77777777-7777-7777-7777-777777777707', 'home_group', '22222222-2222-2222-2222-222222222201', null, null, null),
+  ('77777777-7777-7777-7777-777777777708', 'major', null, '33333333-3333-3333-3333-333333333301', null, null),
+  ('77777777-7777-7777-7777-777777777709', 'staff_member', null, null, null, '11111111-1111-1111-1111-111111111102'),
+  ('77777777-7777-7777-7777-77777777770a', 'everyone', null, null, null, null);
+
+-- weekly mentor meeting for נועם with מיכל (Mentor), so the daily schedule and
+-- conflict tests have a real meeting source (Mondays 16:00)
+insert into public.meeting_schedules (id, student_id, staff_id, context, weekday, meeting_time)
+values ('77777777-7777-7777-7777-777777777711', '44444444-4444-4444-4444-444444444401', '11111111-1111-1111-1111-111111111102', 'mentor', 1, '16:00')
+on conflict do nothing;
+
+-- generate occurrences for the current + next school weeks
+insert into public.meeting_occurrences (schedule_id, due_at, week_start)
+select '77777777-7777-7777-7777-777777777711',
+       ((week_start::date + 1) + '16:00'::time) at time zone 'Asia/Jerusalem',
+       week_start::date
+  from generate_series(
+         (current_date - ((extract(dow from current_date))::int))::timestamp,
+         (current_date + 28)::timestamp,
+         interval '7 days'
+       ) as week_start
+on conflict do nothing;
+
+-- ------------------------------------------------- student employment -------
+-- Canonical school years (1=א 2=ב 3=ג 4=ד): 401–404 = ג, 405–408 = ב,
+-- 409–40c = ד, 40d+ = א (not employment-eligible).
+update public.students set school_year = 3
+ where id between '44444444-4444-4444-4444-444444444401' and '44444444-4444-4444-4444-444444444404';
+update public.students set school_year = 2
+ where id between '44444444-4444-4444-4444-444444444405' and '44444444-4444-4444-4444-444444444408';
+update public.students set school_year = 4
+ where id between '44444444-4444-4444-4444-444444444409' and '44444444-4444-4444-4444-44444444440c';
+update public.students set school_year = 1
+ where id between '44444444-4444-4444-4444-44444444440d' and '44444444-4444-4444-4444-4444444444ff';
+-- תהל מוסקל demonstrates the real pre-deploy state: an existing student whose
+-- year was never set (school_year NULL) — surfaced as "שנה לא הוגדרה" in the
+-- employment screen until leadership/super_admin set it explicitly.
+update public.students set school_year = null
+ where id = '44444444-4444-4444-4444-44444444440e';
+
+-- a real employment coordinator (רכז/ת תעסוקה): איתי גפן
+insert into public.user_roles (staff_id, role)
+values ('11111111-1111-1111-1111-111111111105', 'employment_coordinator')
+on conflict do nothing;
+
+-- placements / weekly slots / work logs (fictional)
+delete from public.student_employment_placements
+ where id between '88888888-8888-8888-8888-888888888801'
+              and '88888888-8888-8888-8888-8888888888ff';
+
+-- נועם (ג): historical placement + active placement Tue 08:30–15:00 + logs
+insert into public.student_employment_placements
+  (id, student_id, workplace_name, start_date, end_date, is_active, created_by_staff_id)
+values
+  ('88888888-8888-8888-8888-888888888801', '44444444-4444-4444-4444-444444444401',
+   'משתלת החממה', current_date - 300, current_date - 90, false,
+   '11111111-1111-1111-1111-111111111105'),
+  ('88888888-8888-8888-8888-888888888802', '44444444-4444-4444-4444-444444444401',
+   'בית קפה החממה', current_date - 60, null, true,
+   '11111111-1111-1111-1111-111111111105');
+
+insert into public.student_employment_weekly_slots (placement_id, weekday, start_time, end_time)
+values
+  ('88888888-8888-8888-8888-888888888802', 2, '08:30', '15:00');
+
+insert into public.student_employment_work_logs
+  (placement_id, student_id, work_date, start_time, end_time, duration_minutes, entered_by_staff_id)
+values
+  ('88888888-8888-8888-8888-888888888802', '44444444-4444-4444-4444-444444444401',
+   current_date - 14, '08:30', '15:00', 390, '11111111-1111-1111-1111-111111111105'),
+  ('88888888-8888-8888-8888-888888888802', '44444444-4444-4444-4444-444444444401',
+   current_date - 7, '09:00', '14:00', 300, '11111111-1111-1111-1111-111111111105');
+
+-- תמר (ב): active placement, logs summing to EXACTLY 200h (16×12h + 8h)
+insert into public.student_employment_placements
+  (id, student_id, workplace_name, start_date, is_active, created_by_staff_id)
+values
+  ('88888888-8888-8888-8888-888888888803', '44444444-4444-4444-4444-444444444405',
+   'משתלת חממה דרום', current_date - 120, true,
+   '11111111-1111-1111-1111-111111111105');
+
+insert into public.student_employment_weekly_slots (placement_id, weekday, start_time, end_time)
+values
+  ('88888888-8888-8888-8888-888888888803', 0, '09:00', '14:00');
+
+insert into public.student_employment_work_logs
+  (placement_id, student_id, work_date, start_time, end_time, duration_minutes, entered_by_staff_id)
+select '88888888-8888-8888-8888-888888888803', '44444444-4444-4444-4444-444444444405',
+       (current_date - 1 - (g.k * 2))::date, '09:00', '21:00', 720,
+       '11111111-1111-1111-1111-111111111105'
+  from generate_series(0, 15) as g(k);
+insert into public.student_employment_work_logs
+  (placement_id, student_id, work_date, start_time, end_time, duration_minutes, entered_by_staff_id)
+values
+  ('88888888-8888-8888-8888-888888888803', '44444444-4444-4444-4444-444444444405',
+   current_date - 1 - 32, '09:00', '17:00', 480, '11111111-1111-1111-1111-111111111105');
+
+-- גילי (ד): active placement, logs ABOVE 200h (17×12h = 204h)
+insert into public.student_employment_placements
+  (id, student_id, workplace_name, start_date, is_active, created_by_staff_id)
+values
+  ('88888888-8888-8888-8888-888888888804', '44444444-4444-4444-4444-444444444409',
+   'מוסך לוי', current_date - 150, true,
+   '11111111-1111-1111-1111-111111111105');
+
+insert into public.student_employment_weekly_slots (placement_id, weekday, start_time, end_time)
+values
+  ('88888888-8888-8888-8888-888888888804', 4, '08:00', '16:00');
+
+insert into public.student_employment_work_logs
+  (placement_id, student_id, work_date, start_time, end_time, duration_minutes, entered_by_staff_id)
+select '88888888-8888-8888-8888-888888888804', '44444444-4444-4444-4444-444444444409',
+       (current_date - 1 - (g.k * 2))::date, '08:00', '20:00', 720,
+       '11111111-1111-1111-1111-111111111105'
+  from generate_series(0, 16) as g(k);
+
+-- audit the seeded placements (consistent with the RPC behavior)
+insert into public.audit_logs (actor_staff_id, action, entity_type, entity_id, metadata)
+select '11111111-1111-1111-1111-111111111105', 'employment_placement_created',
+       'employment_placement', pl.id,
+       jsonb_build_object('student_id', pl.student_id, 'workplace', pl.workplace_name)
+  from public.student_employment_placements pl
+ where pl.id in ('88888888-8888-8888-8888-888888888801',
+                 '88888888-8888-8888-8888-888888888802',
+                 '88888888-8888-8888-8888-888888888803',
+                 '88888888-8888-8888-8888-888888888804');
+
+-- ------------------------------------------------------------ audit -------
 insert into public.audit_logs (actor_staff_id, action, entity_type, entity_id, metadata)
 values
   (null, 'seed_applied', 'system', null,

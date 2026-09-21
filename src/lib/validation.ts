@@ -64,6 +64,7 @@ export const staffCreateSchema = z.object({
       "major_head",
       "counselor",
       "project_coordinator",
+      "employment_coordinator",
       "leadership",
       "super_admin",
     ])
@@ -85,6 +86,7 @@ export const setRolesSchema = z.object({
     "major_head",
     "counselor",
     "project_coordinator",
+    "employment_coordinator",
     "leadership",
     "super_admin",
   ])),
@@ -96,6 +98,13 @@ export const studentSchema = z.object({
   lastName: z.string().trim().min(1, "חסר שם משפחה").max(80),
   groupId: uuidSchema.nullable(),
   majorId: uuidSchema.nullable(),
+  schoolYear: z.coerce
+    .number()
+    .int()
+    .min(1, "שכבה לא תקינה")
+    .max(4, "שכבה לא תקינה")
+    .nullable()
+    .optional(),
   isArchived: z.boolean().default(false),
 });
 
@@ -158,6 +167,73 @@ export const learningGroupWindowSchema = z
     path: ["closesAt"],
   });
 
+// --------------------------------------------------------- calendar events --
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export const calendarAudienceSchema = z
+  .object({
+    type: z.enum([
+      "everyone",
+      "staff_only",
+      "home_group",
+      "major",
+      "learning_group",
+      "staff_member",
+    ]),
+    greenhouseGroupId: uuidSchema.nullable().optional(),
+    majorId: uuidSchema.nullable().optional(),
+    learningGroupId: uuidSchema.nullable().optional(),
+    staffId: uuidSchema.nullable().optional(),
+  })
+  .refine(
+    (a) =>
+      (a.type === "home_group" && !!a.greenhouseGroupId) ||
+      (a.type === "major" && !!a.majorId) ||
+      (a.type === "learning_group" && !!a.learningGroupId) ||
+      (a.type === "staff_member" && !!a.staffId) ||
+      a.type === "everyone" ||
+      a.type === "staff_only",
+    { message: "קהל יעד לא תקין" }
+  );
+
+export const calendarEventSchema = z
+  .object({
+    id: uuidSchema.optional(),
+    title: z.string().trim().min(1, "חסרה כותרת").max(200),
+    description: z.string().trim().max(2000).optional().or(z.literal("")),
+    startDate: z.string().regex(DATE_RE, "תאריך התחלה לא תקין"),
+    startTime: z.string(), // "HH:MM" or "" (all-day)
+    endDate: z.string().regex(DATE_RE, "תאריך סיום לא תקין"),
+    endTime: z.string(),
+    isAllDay: z.boolean(),
+    recurrence: z.enum(["none", "weekly", "monthly"]),
+    recurrenceUntil: z
+      .string()
+      .regex(DATE_RE, "תאריך סיום חזרה לא תקין")
+      .or(z.literal("")),
+    audiences: z.array(calendarAudienceSchema).min(1, "נדרש לפחות קהל יעד אחד"),
+  })
+  .refine(
+    (v) => {
+      if (v.isAllDay) return true;
+      return /^([01]\d|2[0-3]):[0-5]\d$/.test(v.startTime) && /^([01]\d|2[0-3]):[0-5]\d$/.test(v.endTime);
+    },
+    { message: "שעות התחלה וסיום נדרשות" }
+  )
+  .refine(
+    (v) =>
+      v.endDate > v.startDate ||
+      (v.endDate === v.startDate && (v.isAllDay || v.endTime > v.startTime)),
+    { message: "סוף האירוע חייב להיות אחרי התחלתו" }
+  )
+  .refine(
+    (v) =>
+      v.recurrence === "none" ||
+      (v.recurrenceUntil !== "" && v.recurrenceUntil >= v.startDate),
+    { message: "אירוע חוזר דורש תאריך סיום מהתאריך הראשון ואילך" }
+  );
+
 export const majorSchema = z.object({
   id: uuidSchema.optional(),
   name: z.string().trim().min(1, "חסר שם מגמה").max(80),
@@ -194,6 +270,70 @@ export const csvStaffRowSchema = z.object({
   email: z.string().trim().toLowerCase().pipe(z.email()),
   fullName: z.string().trim().optional().default(""),
 });
+
+// ------------------------------------------------------------ employment ----
+
+export const employmentSlotSchema = learningGroupSlotSchema;
+
+export const employmentPlacementSchema = z
+  .object({
+    studentId: uuidSchema,
+    workplaceName: z.string().trim().min(1, "חסר שם מקום עבודה").max(120),
+    contactName: z.string().trim().max(120).optional().or(z.literal("")),
+    contactPhone: z.string().trim().max(30).optional().or(z.literal("")),
+    startDate: z.string().regex(DATE_RE, "תאריך התחלה לא תקין"),
+    endDate: z.string().regex(DATE_RE, "תאריך סיום לא תקין").or(z.literal("")),
+    notes: z.string().trim().max(1000).optional().or(z.literal("")),
+    slots: z.array(employmentSlotSchema).max(28),
+  })
+  .refine((v) => v.endDate === "" || v.endDate >= v.startDate, {
+    message: "תאריך סיום חייב להיות מאוחר מתאריך ההתחלה",
+    path: ["endDate"],
+  });
+
+export const employmentExceptionSchema = z
+  .object({
+    placementId: uuidSchema,
+    workDate: z.string().regex(DATE_RE, "תאריך לא תקין"),
+    kind: z.enum(["add", "cancel", "modify"]),
+    startTime: z.string(),
+    endTime: z.string(),
+    note: z.string().trim().max(500).optional().or(z.literal("")),
+  })
+  .refine(
+    (v) =>
+      v.kind === "cancel"
+        ? v.startTime === "" && v.endTime === ""
+        : /^([01]\d|2[0-3]):[0-5]\d$/.test(v.startTime) &&
+          /^([01]\d|2[0-3]):[0-5]\d$/.test(v.endTime) &&
+          v.endTime > v.startTime,
+    { message: "שעות עבודה לא תקינות" }
+  );
+
+export const workLogSchema = z
+  .object({
+    placementId: uuidSchema,
+    workDate: z.string().regex(DATE_RE, "תאריך עבודה לא תקין"),
+    startTime: z.string(), // "HH:MM" or ""
+    endTime: z.string(), // "HH:MM" or ""
+    durationMinutes: z.coerce.number().int().min(0).max(720).optional(),
+    note: z.string().trim().max(500).optional().or(z.literal("")),
+  })
+  .refine(
+    (v) =>
+      v.startTime !== "" && v.endTime !== ""
+        ? /^([01]\d|2[0-3]):[0-5]\d$/.test(v.startTime) &&
+          /^([01]\d|2[0-3]):[0-5]\d$/.test(v.endTime)
+        : (v.durationMinutes ?? 0) >= 1,
+    { message: "הזינו שעות התחלה וסיום או משך עבודה" }
+  )
+  .refine(
+    (v) =>
+      v.startTime === "" ||
+      v.endTime === "" ||
+      /^([01]\d|2[0-3]):[0-5]\d$/.test(v.startTime),
+    { message: "שעות לא תקינות — הזינו התחלה וסיום או משך בלבד" }
+  );
 
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
 export type StudentInput = z.infer<typeof studentSchema>;

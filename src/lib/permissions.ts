@@ -16,6 +16,7 @@ export type Role =
   | "major_head"
   | "counselor"
   | "project_coordinator"
+  | "employment_coordinator"
   | "leadership"
   | "super_admin";
 
@@ -26,6 +27,7 @@ export const ALL_ROLES: Role[] = [
   "major_head",
   "counselor",
   "project_coordinator",
+  "employment_coordinator",
   "leadership",
   "super_admin",
 ];

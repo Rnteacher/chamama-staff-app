@@ -255,6 +255,7 @@ export async function upsertStudentAction(
       lastName: str(fd, "lastName"),
       groupId: uuidOrNull(str(fd, "groupId")),
       majorId: uuidOrNull(str(fd, "majorId")),
+      schoolYear: str(fd, "schoolYear") === "" ? null : Number(str(fd, "schoolYear")),
       isArchived: bool(fd, "isArchived"),
     });
     if (!parsed.success) {
@@ -266,6 +267,7 @@ export async function upsertStudentAction(
       last_name: s.lastName,
       group_id: s.groupId,
       major_id: s.majorId,
+      school_year: s.schoolYear ?? null,
       is_archived: s.isArchived,
     };
     if (s.id) {

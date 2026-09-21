@@ -4,10 +4,15 @@ import {
   slotSetsOverlap,
   firstConflict,
   describeConflictHe,
+  describeRecurrenceHe,
   formatWeeklySlotsHe,
   formatWeeklySlotHe,
   isValidSlotRange,
   isValidTime,
+  normalizeTime,
+  upcomingWeekdayDates,
+  sortScheduleItems,
+  isNow,
 } from "@/lib/schedule";
 
 const slot = (weekday: number, startTime: string, endTime: string) => ({
@@ -107,5 +112,86 @@ describe("validation helpers", () => {
     expect(isValidSlotRange(slot(1, "16:00", "17:30"))).toBe(true);
     expect(isValidSlotRange(slot(1, "16:00", "16:00"))).toBe(false);
     expect(isValidSlotRange(slot(1, "18:00", "16:00"))).toBe(false);
+  });
+
+  it("normalizes Postgres HH:MM:SS times (touching stays touching)", () => {
+    expect(normalizeTime("16:00:00")).toBe("16:00");
+    // without normalization "10:00" < "10:00:00" would wrongly overlap
+    expect(
+      slotsOverlap(slot(3, "10:00", "11:00"), slot(3, "11:00:00", "12:00"))
+    ).toBe(false);
+  });
+});
+
+describe("describeRecurrenceHe — Hebrew recurrence summary", () => {
+  it("one-off", () => {
+    expect(
+      describeRecurrenceHe({ recurrence: "none", recurrenceUntil: "", startDate: "2026-09-21" })
+    ).toBe("חד פעמי");
+  });
+
+  it("weekly with until", () => {
+    expect(
+      describeRecurrenceHe({
+        recurrence: "weekly",
+        recurrenceUntil: "2027-06-30",
+        startDate: "2026-09-21", // Monday
+      })
+    ).toBe("כל שבוע ביום שני, עד 30/06/2027");
+  });
+
+  it("monthly with until", () => {
+    expect(
+      describeRecurrenceHe({
+        recurrence: "monthly",
+        recurrenceUntil: "2027-06-30",
+        startDate: "2026-09-15",
+      })
+    ).toBe("כל חודש בתאריך 15, עד 30/06/2027");
+  });
+});
+
+describe("upcomingWeekdayDates — concrete conflict-check horizon", () => {
+  it("starts on the matching weekday and steps by 7", () => {
+    const dates = upcomingWeekdayDates("2026-09-21", 3, 3); // Sep 21 2026 is a Monday; 3=Wednesday
+    expect(dates).toEqual(["2026-09-23", "2026-09-30", "2026-10-07"]);
+  });
+
+  it("includes today when the weekday matches", () => {
+    const dates = upcomingWeekdayDates("2026-09-21", 1, 2);
+    expect(dates[0]).toBe("2026-09-21");
+    expect(dates[1]).toBe("2026-09-28");
+  });
+});
+
+describe("unified schedule item helpers", () => {
+  const item = (startAt: string, endAt: string, isAllDay = false) => ({
+    sourceType: "calendar_event" as const,
+    sourceId: "x",
+    title: "t",
+    startAt,
+    endAt,
+    isAllDay,
+    context: null,
+    linkPath: null,
+  });
+
+  it("all-day items come first, then chronological", () => {
+    const sorted = sortScheduleItems([
+      item("2026-09-21T08:00:00Z", "2026-09-21T09:00:00Z"),
+      item("2026-09-20T21:00:00Z", "2026-09-21T20:59:00Z", true), // all day IL
+      item("2026-09-21T06:00:00Z", "2026-09-21T07:00:00Z"),
+    ]);
+    expect(sorted[0].isAllDay).toBe(true);
+    expect(sorted[1].startAt).toBe("2026-09-21T06:00:00Z");
+    expect(sorted[2].startAt).toBe("2026-09-21T08:00:00Z");
+  });
+
+  it("isNow marks the current item (Jerusalem instants)", () => {
+    const now = new Date("2026-09-21T09:30:00Z");
+    expect(isNow(item("2026-09-21T09:00:00Z", "2026-09-21T10:00:00Z"), now)).toBe(true);
+    expect(isNow(item("2026-09-21T10:00:00Z", "2026-09-21T11:00:00Z"), now)).toBe(false);
+    // touching boundary: 10:00 start is NOT inside [09:00, 10:00)
+    expect(isNow(item("2026-09-21T08:00:00Z", "2026-09-21T09:00:00Z"), now)).toBe(false);
   });
 });

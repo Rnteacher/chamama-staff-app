@@ -2,13 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { uuidSchema } from "@/lib/validation";
 import { requireMe } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { isValidTime, schoolWeekStart, jerusalemWallTimeToUtc } from "@/lib/meetings";
 import { assertNotViewAs } from "@/lib/view-as";
 
 const updateReportSchema = z.object({
-  reportId: z.string().uuid(),
+  reportId: uuidSchema,
   meetingAtLocal: z.string().min(1, "הזינו תאריך ושעה"),
   held: z.boolean(),
   notHeldReason: z.string().trim().max(500).optional().or(z.literal("")),
@@ -86,7 +87,7 @@ export async function deactivateMeetingScheduleAction(
 }
 
 const ADHOC_SCHEMA = z.object({
-  studentId: z.string().uuid(),
+  studentId: uuidSchema,
   context: z.enum(["mentor", "master"]),
   meetingAtLocal: z.string().min(1, "הזינו תאריך ושעה"),
   held: z.boolean(),
@@ -167,12 +168,12 @@ function err(e: unknown): string {
 }
 
 const scheduleSchema = z.object({
-  studentId: z.string().uuid(),
+  studentId: uuidSchema,
   context: z.enum(["mentor", "master"]),
   weekday: z.coerce.number().int().min(0).max(6),
   meetingTime: z.string().refine(isValidTime, "שעה לא תקינה"),
   isActive: z.boolean(),
-  scheduleId: z.string().uuid().nullable().optional(),
+  scheduleId: uuidSchema.nullable().optional(),
 });
 
 export async function upsertMeetingScheduleAction(
@@ -202,11 +203,13 @@ export async function upsertMeetingScheduleAction(
 }
 
 const reportSchema = z.object({
-  occurrenceId: z.string().uuid(),
+  occurrenceId: uuidSchema,
   held: z.boolean(),
   notHeldReason: z.string().trim().max(500).optional().or(z.literal("")),
   /** Jerusalem wall time from datetime-local; converted to UTC here */
   rescheduleLocal: z.string().optional().or(z.literal("")),
+  /** user acknowledged scheduling conflicts (server still verifies them) */
+  overrideConflicts: z.boolean().default(false),
   status: z.enum(["green", "yellow", "red"]),
   intervention: z.boolean(),
   categories: z.array(z.enum(["functional", "emotional", "other"])),
@@ -216,9 +219,24 @@ const reportSchema = z.object({
   nextSteps: z.string().trim().max(2000).optional().or(z.literal("")),
 });
 
+export interface MeetingConflictInfo {
+  sourceType: "calendar_event" | "learning_group" | "meeting" | "employment";
+  title: string;
+  description: string;
+}
+
+export type SubmitReportResult =
+  | { ok: true }
+  | { ok: false; error: string }
+  | {
+      ok: false;
+      needsOverride: true;
+      conflicts: MeetingConflictInfo[];
+    };
+
 export async function submitMeetingReportAction(
   input: z.input<typeof reportSchema>
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<SubmitReportResult> {
   const parsed = reportSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
@@ -242,7 +260,55 @@ export async function submitMeetingReportAction(
     if (schoolWeekStart(utc) !== schoolWeekStart(new Date())) {
       return { ok: false, error: "מועד חדש מותר רק בתוך אותו שבוע לימודים (ראשון–שבת)" };
     }
+
     rescheduleIso = utc.toISOString();
+  }
+
+  // conflict gate (server-computed; never browser-only): the student's
+  // canonical schedule vs the new slot
+  if (!d.held && rescheduleIso && !d.overrideConflicts) {
+    const { data: occ } = await supabase
+      .from("meeting_occurrences")
+      .select("id, schedule_id")
+      .eq("id", d.occurrenceId)
+      .maybeSingle();
+    const schedId = (occ as { schedule_id: string } | null)?.schedule_id;
+    const { data: sched } = schedId
+      ? await supabase
+          .from("meeting_schedules")
+          .select("student_id")
+          .eq("id", schedId)
+          .maybeSingle()
+      : { data: null };
+    const studentId = (sched as { student_id: string } | null)?.student_id;
+    if (studentId && d.rescheduleLocal) {
+      const rescheduleTime = d.rescheduleLocal.split("T")[1];
+      const { data: conflictRows, error: conflictError } = await supabase.rpc(
+        "check_student_meeting_conflicts",
+        {
+          p_student_id: studentId,
+          p_dates: [rescheduleIso.slice(0, 10)],
+          p_start_time: `${rescheduleTime}:00`,
+          p_duration_minutes: 60,
+          p_exclude_occurrence_id: d.occurrenceId,
+        }
+      );
+      if (!conflictError && Array.isArray(conflictRows) && conflictRows.length > 0) {
+        return {
+          ok: false,
+          needsOverride: true,
+          conflicts: (conflictRows as {
+            source_type: MeetingConflictInfo["sourceType"];
+            title: string;
+            description: string;
+          }[]).map((c) => ({
+            sourceType: c.source_type,
+            title: c.title,
+            description: c.description,
+          })),
+        };
+      }
+    }
   }
 
   const { error } = await supabase.rpc("submit_meeting_report", {

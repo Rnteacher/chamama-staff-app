@@ -139,3 +139,106 @@ export function firstConflict(
   }
   return null;
 }
+
+// ============================================================================
+// PHASE 2 — annual calendar + unified daily schedule helpers
+// ============================================================================
+
+export type RecurrenceKind = "none" | "weekly" | "monthly";
+
+export interface CalendarEventInput {
+  title: string;
+  startDate: string; // "YYYY-MM-DD" Jerusalem wall date
+  startTime: string; // "HH:MM" ("" for all-day)
+  endDate: string;
+  endTime: string;
+  isAllDay: boolean;
+  recurrence: RecurrenceKind;
+  recurrenceUntil: string; // "YYYY-MM-DD" | ""
+}
+
+/** "YYYY-MM-DD" → Date.UTC-safe parts (no timezone drift). */
+export function parseISODate(iso: string): { y: number; m: number; d: number } {
+  const [y, m, d] = iso.split("-").map(Number);
+  return { y, m, d };
+}
+
+export function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+export function isoDate(y: number, m: number, d: number): string {
+  return `${y}-${pad2(m)}-${pad2(d)}`;
+}
+
+/** JS weekday (0=Sunday) of a "YYYY-MM-DD" wall date (UTC-safe). */
+export function weekdayOf(iso: string): number {
+  const { y, m, d } = parseISODate(iso);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+}
+
+/**
+ * The next `count` wall dates with the given weekday (0=Sunday), starting
+ * from the given Jerusalem date (inclusive). Used to build the concrete
+ * conflict-check horizon for a recurring weekly meeting.
+ */
+export function upcomingWeekdayDates(
+  fromDate: string,
+  weekday: number,
+  count: number
+): string[] {
+  const { y, m, d } = parseISODate(fromDate);
+  const start = new Date(Date.UTC(y, m - 1, d));
+  const fromWeekday = start.getUTCDay();
+  const delta = (weekday - fromWeekday + 7) % 7;
+  const dates: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const next = new Date(start.getTime() + (delta + i * 7) * 86_400_000);
+    dates.push(
+      isoDate(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate())
+    );
+  }
+  return dates;
+}
+
+/** Human-readable Hebrew recurrence summary for the editor. */
+export function describeRecurrenceHe(
+  event: Pick<CalendarEventInput, "recurrence" | "recurrenceUntil" | "startDate">
+): string {
+  if (event.recurrence === "none") return "חד פעמי";
+  const until = event.recurrenceUntil
+    ? event.recurrenceUntil.split("-").reverse().join("/")
+    : "";
+  if (event.recurrence === "weekly") {
+    const wd = weekdayOf(event.startDate);
+    return `כל שבוע ביום ${WEEKDAY_NAMES_HE[wd]}${until ? `, עד ${until}` : ""}`;
+  }
+  const dom = parseISODate(event.startDate).d;
+  return `כל חודש בתאריך ${dom}${until ? `, עד ${until}` : ""}`;
+}
+
+/** Normalized unified schedule item shape (mirrors the SQL RPCs). */
+export interface ScheduleItem {
+  sourceType: "calendar_event" | "meeting" | "learning_group";
+  sourceId: string;
+  title: string;
+  startAt: string; // ISO
+  endAt: string; // ISO
+  isAllDay: boolean;
+  context: string | null;
+  linkPath: string | null;
+}
+
+/** All-day items first, then chronological by start time. */
+export function sortScheduleItems(items: ScheduleItem[]): ScheduleItem[] {
+  return [...items].sort((a, b) => {
+    if (a.isAllDay !== b.isAllDay) return a.isAllDay ? -1 : 1;
+    return a.startAt.localeCompare(b.startAt);
+  });
+}
+
+/** Is "now" inside [start, end)? (for the current-item highlight) */
+export function isNow(item: Pick<ScheduleItem, "startAt" | "endAt">, now = new Date()): boolean {
+  const t = now.getTime();
+  return new Date(item.startAt).getTime() <= t && t < new Date(item.endAt).getTime();
+}

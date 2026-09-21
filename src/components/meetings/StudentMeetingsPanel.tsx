@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import ConversationalForm, { type Question, type Answers } from "@/components/conversational/ConversationalForm";
-import { upsertMeetingScheduleAction, submitMeetingReportAction, submitAdhocMeetingReportAction, deactivateMeetingScheduleAction } from "@/lib/actions/meetings";
+import { upsertMeetingScheduleAction, submitMeetingReportAction, submitAdhocMeetingReportAction, deactivateMeetingScheduleAction, type SubmitReportResult, type MeetingConflictInfo } from "@/lib/actions/meetings";
+import { checkWeeklyMeetingConflictsAction } from "@/lib/actions/calendar";
 import { WEEKDAY_SHORT_LABELS, WEEKDAY_LABELS, schoolWeekStart, isValidTime, jerusalemWallTimeToUtc, jerusalemParts } from "@/lib/meetings";
 
 export interface ScheduleRow {
@@ -223,11 +224,48 @@ function ScheduleDialog({
   const [pending, startTransition] = useTransition();
   const dialogRef = useRef<HTMLDialogElement>(null);
 
+  // server-backed conflict check for the chosen weekly slot
+  const [conflicts, setConflicts] = useState<MeetingConflictInfo[]>([]);
+  const [checking, setChecking] = useState(false);
+  const [override, setOverride] = useState(false);
+
   useEffect(() => {
     if (open) {
       dialogRef.current?.showModal();
     }
   }, [open]);
+
+  // re-check (debounced) whenever the slot changes
+  useEffect(() => {
+    if (!open) return;
+    const timer = setTimeout(async () => {
+      await Promise.resolve();
+      setChecking(true);
+      setOverride(false);
+      setConflicts([]);
+      const res = await checkWeeklyMeetingConflictsAction({
+        studentId,
+        weekday,
+        time,
+        weeks: 8,
+      });
+      // dedupe identical conflicts across the horizon (same weekly clash)
+      const seen = new Set<string>();
+      const deduped = (res.ok ? res.conflicts : []).filter((c) => {
+        const key = `${c.sourceType}|${c.description}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      setConflicts(deduped);
+      setChecking(false);
+    }, 350);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [open, studentId, weekday, time]);
+
+  const blocked = conflicts.length > 0 && !override;
 
   function save() {
     if (!isValidTime(time)) {
@@ -319,12 +357,37 @@ function ScheduleDialog({
           פגישה פעילה
         </label>
 
+        {checking && (
+          <p className="text-xs text-muted" aria-live="polite">
+            בודק חפיפות בלוח הזמנים של החניך/ה…
+          </p>
+        )}
+        {!checking && conflicts.length > 0 && (
+          <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm">
+            <p className="font-bold text-amber-900">נמצאו חפיפות בלוח הזמנים של החניך/ה:</p>
+            <ul className="mt-1 list-inside list-disc text-amber-900">
+              {conflicts.slice(0, 6).map((c, i) => (
+                <li key={i}>{c.description}</li>
+              ))}
+            </ul>
+            <label className="mt-2 flex items-center gap-2 font-semibold text-amber-900">
+              <input
+                type="checkbox"
+                checked={override}
+                onChange={(e) => setOverride(e.target.checked)}
+                className="h-5 w-5 accent-[#46b800]"
+              />
+              קביעה בכל זאת
+            </label>
+          </div>
+        )}
+
         {error && <p role="alert" className="text-sm font-semibold text-danger">{error}</p>}
 
         <div className="mt-1 flex gap-2">
           <button
             type="submit"
-            disabled={pending}
+            disabled={pending || blocked}
             className="flex-1 rounded-full bg-brand px-4 py-3 font-extrabold text-ink disabled:opacity-60"
           >
             {pending ? "שומרים…" : "שמירה"}
@@ -371,6 +434,9 @@ function ReportWizard({
   }));
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  // scheduling conflicts found server-side for the new slot; the user may
+  // override them explicitly ("קביעה בכל זאת")
+  const [conflicts, setConflicts] = useState<MeetingConflictInfo[] | null>(null);
 
   // default meeting date/time to current Asia/Jerusalem local date/time
   const defaultMeetingAt = useMemo(() => {
@@ -569,13 +635,14 @@ function ReportWizard({
           ? occurrence.context
           : (answers.context as "mentor" | "master" | undefined) ?? allowedContexts[0] ?? "mentor";
 
-        let res;
+        let res: SubmitReportResult;
         if (isScheduled && occurrence) {
           res = await submitMeetingReportAction({
             occurrenceId: occurrence.occurrenceId,
             held: answers.held === "yes",
             notHeldReason: String(answers.not_held_reason ?? ""),
             rescheduleLocal: String(answers.reschedule ?? ""),
+            overrideConflicts: conflicts !== null,
             status: String(answers.status ?? "") as "green" | "yellow" | "red",
             intervention: answers.intervention === "yes",
             categories: Array.isArray(answers.categories)
@@ -607,9 +674,14 @@ function ReportWizard({
 
         if (res.ok) {
           resolve();
+        } else if ("needsOverride" in res && res.needsOverride) {
+          // server found conflicts — surface them and require explicit override
+          setConflicts(res.conflicts);
+          setSubmitError(null);
+          reject(new Error("conflicts"));
         } else {
-          setSubmitError(res.error);
-          reject(new Error(res.error));
+          setSubmitError("error" in res ? res.error : "השליחה נכשלה");
+          reject(new Error("error" in res ? res.error : "error"));
         }
       });
     });
@@ -665,10 +737,36 @@ function ReportWizard({
           </label>
         )}
 
+        {conflicts && conflicts.length > 0 && (
+          <div role="alert" className="mb-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm">
+            <p className="font-bold text-amber-900">
+              המועד החדש חופף לפעילות אחרת של החניך/ה:
+            </p>
+            <ul className="mt-1 list-inside list-disc text-amber-900">
+              {conflicts.slice(0, 6).map((c, i) => (
+                <li key={i}>{c.description}</li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              onClick={() => {
+                // acknowledge → next submit sends overrideConflicts=true
+                setConflicts(null);
+              }}
+              className="mt-2 rounded-full bg-amber-500 px-4 py-2 text-xs font-extrabold text-white"
+            >
+              קביעה בכל זאת
+            </button>
+          </div>
+        )}
+
         <ConversationalForm
           questions={questions}
           answers={answers}
-          onAnswersChange={setAnswers}
+          onAnswersChange={(next) => {
+            if (next.reschedule !== answers.reschedule) setConflicts(null);
+            setAnswers(next);
+          }}
           onSubmit={submit}
           submitLabel="שליחת הדיווח"
           successText="הדיווח נשלח בהצלחה"

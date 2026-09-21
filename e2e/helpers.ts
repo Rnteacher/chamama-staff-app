@@ -8,6 +8,7 @@ export const USERS = {
   mentor: { email: "michal@chamama.example", password: "Chamama2026!" },
   master: { email: "naama@chamama.example", password: "Chamama2026!" },
   deactivated: { email: "dana@chamama.example", password: "Chamama2026!" },
+  coordinator: { email: "itay@chamama.example", password: "Chamama2026!" },
 };
 
 /**

@@ -3,9 +3,18 @@ import { cookies } from "next/headers";
 import { requireMe, isPrivileged } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { timeAgo } from "@/lib/format";
-import { WEEKDAY_SHORT_LABELS } from "@/lib/meetings";
+import { WEEKDAY_SHORT_LABELS, jerusalemParts } from "@/lib/meetings";
 import { ROLE_LABELS } from "@/lib/constants";
 import { getViewAsState } from "@/lib/view-as";
+import { fetchStaffDay } from "@/lib/calendar";
+import {
+  isoDate,
+  sortScheduleItems,
+  isNow,
+  formatWeeklySlotHe,
+  type ScheduleItem,
+  type WeeklySlot,
+} from "@/lib/schedule";
 import StudentRow, { type StudentRowData } from "@/components/StudentRow";
 import StudentDataTable, { type StudentTableRow } from "@/components/tables/StudentDataTable";
 import EmptyState from "@/components/EmptyState";
@@ -109,6 +118,42 @@ export default async function HomePage() {
     .filter((s): s is StudentRowData => Boolean(s))
     .sort((a, b) => b.unread - a.unread);
 
+  // ------------------------- היום שלי + קבוצות למידה היום (unified day) -----
+  const jp = jerusalemParts(new Date());
+  const todayISO = isoDate(jp.year, jp.month, jp.day);
+  const scheduleStaffId = useViewAs ? viewAs.staffId! : me.staffId;
+  const [myDayRes, lgTodayRes] = await Promise.all([
+    scheduleStaffId
+      ? fetchStaffDay(supabase, scheduleStaffId, todayISO)
+      : Promise.resolve([]),
+    supabase.rpc("learning_groups_on_weekday", { p_weekday: jp.weekday }),
+  ]);
+  const myDay = sortScheduleItems(myDayRes);
+  interface LgTodayRow {
+    learning_group_id: string;
+    group_name: string;
+    is_active: boolean;
+    start_time: string;
+    end_time: string;
+    staff_leader_names: string[] | null;
+    student_leader_names: string[] | null;
+  }
+  const learningGroupsToday = ((lgTodayRes.data ?? []) as unknown as LgTodayRow[])
+    .map((row) => ({
+      id: row.learning_group_id,
+      name: row.group_name,
+      isActive: row.is_active,
+      slot: {
+        weekday: jp.weekday,
+        startTime: row.start_time.slice(0, 5),
+        endTime: row.end_time.slice(0, 5),
+      } satisfies WeeklySlot,
+      staffLeaders: row.staff_leader_names ?? [],
+      studentLeaders: row.student_leader_names ?? [],
+    }))
+    .filter((g) => g.isActive)
+    .sort((a, b) => a.slot.startTime.localeCompare(b.slot.startTime));
+
   const groups = (groupsRes.data ?? []).map((g) => ({
     id: g.id, name: g.name,
     unread: [...studentById.values()].filter((s) => s.groupName === g.name).reduce((sum, s) => sum + s.unread, 0),
@@ -147,6 +192,75 @@ export default async function HomePage() {
         <SearchGlyph />
         <span>חיפוש חניך…</span>
       </Link>
+
+      {/* --------------------------------------------------- היום שלי ---- */}
+      <section aria-labelledby="my-day-heading">
+        <div className="mb-2 flex items-center justify-between">
+          <h2 id="my-day-heading" className="font-extrabold">
+            היום שלי
+            <span className="mr-2 text-sm font-medium text-muted">{WEEKDAY_SHORT_LABELS[jp.weekday]}</span>
+          </h2>
+          <Link href="/calendar" className="text-sm font-medium text-muted hover:text-ink">
+            לוח שנה ›
+          </Link>
+        </div>
+        {myDay.length === 0 ? (
+          <EmptyState
+            title="אין פעילות היום"
+            description="אירועים, פגישות וקבוצות למידה של היום יופיעו כאן."
+          />
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {myDay.map((item) => {
+              const current = !item.isAllDay && isNow(item);
+              return (
+                <li key={`${item.sourceType}-${item.sourceId}-${item.startAt}`}>
+                  <DayItemLink item={item} current={current} />
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      {/* --------------------------------------- קבוצות למידה היום -------- */}
+      <section aria-labelledby="lg-today-heading" className="lg:hidden">
+        <h2 id="lg-today-heading" className="mb-2 font-extrabold">
+          קבוצות למידה היום
+        </h2>
+        {learningGroupsToday.length === 0 ? (
+          <EmptyState
+            title="אין קבוצות למידה היום"
+            description="קבוצות למידה שפועלות היום יופיעו כאן."
+          />
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {learningGroupsToday.map((g) => (
+              <li key={`${g.id}-${g.slot.startTime}`}>
+                <Link
+                  href={`/groups/learning/${g.id}`}
+                  className="flex min-h-[56px] items-center justify-between gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40"
+                >
+                  <span className="min-w-0">
+                    <span className="block font-bold">{g.name}</span>
+                    <span className="block truncate text-xs text-muted">
+                      {[
+                        g.staffLeaders.length > 0 ? `מדריכים: ${g.staffLeaders.join(", ")}` : null,
+                        g.studentLeaders.length > 0 ? `מובילים: ${g.studentLeaders.join(", ")}` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-xs font-semibold text-muted" dir="ltr">
+                    {formatWeeklySlotHe(g.slot).replace(/^יום \S+ /, "")}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {/* עדכונים — renders ABOVE the student table on desktop */}
       <section aria-labelledby="unread-heading">
@@ -281,5 +395,65 @@ function SearchGlyph() {
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
       <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" strokeLinecap="round" />
     </svg>
+  );
+}
+
+const SOURCE_GLYPHS: Record<string, string> = {
+  calendar_event: "📅",
+  meeting: "🗣",
+  learning_group: "👥",
+};
+
+/** One unified-schedule item: all-day badge, times LTR, "עכשיו" highlight. */
+function DayItemLink({ item, current }: { item: ScheduleItem; current: boolean }) {
+  const timeLabel = (iso: string) =>
+    new Intl.DateTimeFormat("he-IL", {
+      timeZone: "Asia/Jerusalem",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(new Date(iso));
+
+  const inner = (
+    <>
+      <span aria-hidden="true" className="mt-0.5 shrink-0">
+        {SOURCE_GLYPHS[item.sourceType] ?? "•"}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block font-bold">
+          {item.title}
+          {current && (
+            <span className="mr-2 rounded-full bg-brand px-2 py-0.5 text-[10px] font-extrabold text-ink">
+              עכשיו
+            </span>
+          )}
+          {item.isAllDay && (
+            <span className="mr-2 rounded-full bg-line px-2 py-0.5 text-[10px] font-bold text-muted">
+              כל היום
+            </span>
+          )}
+        </span>
+        {item.context && (
+          <span className="block truncate text-xs text-muted">{item.context}</span>
+        )}
+      </span>
+      {!item.isAllDay && (
+        <span className="shrink-0 text-xs font-semibold text-muted" dir="ltr">
+          {timeLabel(item.startAt)}–{timeLabel(item.endAt)}
+        </span>
+      )}
+    </>
+  );
+
+  const cls = `flex min-h-[56px] items-center gap-3 rounded-2xl border px-4 py-3 hover:bg-brand-soft/40 ${
+    current ? "border-brand-dark bg-brand-soft" : "border-line bg-surface"
+  }`;
+
+  return item.linkPath ? (
+    <Link href={item.linkPath} className={cls}>
+      {inner}
+    </Link>
+  ) : (
+    <div className={cls}>{inner}</div>
   );
 }

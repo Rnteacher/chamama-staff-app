@@ -95,6 +95,11 @@ export default async function AdminOverviewPage() {
     { label: "מגמות", value: majorsRes.count ?? 0, href: "/admin/majors" },
   ];
 
+  const canManageEmployment =
+    me.roles.includes("employment_coordinator") ||
+    me.roles.includes("leadership") ||
+    me.roles.includes("super_admin");
+
   return (
     <div className="flex flex-col gap-4 lg:gap-6">
       <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:gap-3">
@@ -110,6 +115,18 @@ export default async function AdminOverviewPage() {
           </li>
         ))}
       </ul>
+
+      {canManageEmployment && (
+        <Link
+          href="/admin/employment"
+          className="block rounded-2xl border border-line bg-surface p-4 hover:bg-brand-soft/40"
+        >
+          <span className="block text-lg font-extrabold">ניהול תעסוקה</span>
+          <span className="text-sm text-muted">
+            שיבוצי עבודה, ימי עבודה מתוכננים וצבירת שעות (200 שעות · שכבות ב/ג/ד)
+          </span>
+        </Link>
+      )}
 
       {isSuper && <ViewAsEntry staff={viewAsStaff} />}
 

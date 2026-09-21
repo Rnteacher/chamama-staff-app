@@ -7,6 +7,7 @@ export const ROLE_LABELS: Record<Role, string> = {
   major_head: "ראש מגמה",
   counselor: "יועצ/ת",
   project_coordinator: "רכז/ת פרויקטים",
+  employment_coordinator: "רכז/ת תעסוקה",
   leadership: "הנהלה",
   super_admin: "מנהל מערכת",
 };

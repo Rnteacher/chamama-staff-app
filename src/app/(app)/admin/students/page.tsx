@@ -1,4 +1,4 @@
-import { requireSuperAdmin } from "@/lib/auth";
+﻿import { requireSuperAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import {
   upsertStudentAction,
@@ -9,7 +9,7 @@ import {
 import AdminActionForm from "@/components/admin/AdminActionForm";
 import AdminCsvImport from "@/components/admin/AdminCsvImport";
 
-export const metadata = { title: "ניהול · חניכים" };
+export const metadata = { title: "ניהול חניכים" };
 
 export default async function AdminStudentsPage() {
   await requireSuperAdmin();
@@ -18,7 +18,7 @@ export default async function AdminStudentsPage() {
     await Promise.all([
       supabase
         .from("students")
-        .select("id, first_name, last_name, is_archived, group_id, major_id, greenhouse_groups(name), majors(name)")
+        .select("id, first_name, last_name, is_archived, group_id, major_id, school_year, greenhouse_groups(name), majors(name)")
         .order("first_name"),
       supabase.from("greenhouse_groups").select("id, name").order("name"),
       supabase.from("majors").select("id, name").order("name"),
@@ -81,6 +81,16 @@ export default async function AdminStudentsPage() {
               ))}
             </select>
           </label>
+          <label className="text-sm">
+            שכבה
+            <select name="schoolYear" className="mt-1 w-full rounded-xl border border-line bg-white px-3 py-2">
+              <option value="">— ללא —</option>
+              <option value="1">א׳</option>
+              <option value="2">ב׳</option>
+              <option value="3">ג׳</option>
+              <option value="4">ד׳</option>
+            </select>
+          </label>
         </AdminActionForm>
       </section>
 
@@ -132,6 +142,7 @@ interface StudentAdminData {
   first_name: string;
   last_name: string;
   is_archived: boolean;
+  school_year: number | null;
   group_id: string | null;
   major_id: string | null;
   greenhouse_groups: { name: string } | null;
@@ -246,6 +257,20 @@ function StudentAdminRow({
                 {majors.map((m) => (
                   <option key={m.id} value={m.id}>{m.name}</option>
                 ))}
+              </select>
+            </label>
+            <label className="text-sm">
+              שכבה
+              <select
+                name="schoolYear"
+                defaultValue={student.school_year ?? ""}
+                className="mt-1 w-full rounded-xl border border-line bg-white px-3 py-2"
+              >
+                <option value="">— ללא —</option>
+                <option value="1">א׳</option>
+                <option value="2">ב׳</option>
+                <option value="3">ג׳</option>
+                <option value="4">ד׳</option>
               </select>
             </label>
             <label className="flex items-center gap-2 text-sm sm:col-span-2">
