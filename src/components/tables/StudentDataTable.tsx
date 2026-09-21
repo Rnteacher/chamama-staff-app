@@ -86,7 +86,11 @@ const ALL_COLUMNS: Record<string, ColumnDef> = {
   project_major_name: {
     key: "project_major_name", label: "מגמה", sortable: true,
     sortValue: (r) => r.project_major_name ?? "",
-    render: (r) => <span className="text-muted">{r.has_project ? (r.project_major_name ?? "לא במגמה") : "—"}</span>,
+    render: (r) => (
+      <span className="text-muted">
+        {r.project_major_name ?? (r.has_project ? "לא במגמה" : "—")}
+      </span>
+    ),
   },
   primary_master_name: {
     key: "primary_master_name", label: "מאסטר/ית", sortable: true,

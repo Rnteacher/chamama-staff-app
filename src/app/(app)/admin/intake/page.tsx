@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { requireMe, hasRole } from "@/lib/auth";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient, createClient } from "@/lib/supabase/server";
 import IntakeManager, {
   type IntakeSubmissionRow,
   type IntakeWindowRow,
@@ -16,12 +16,16 @@ export default async function AdminIntakePage() {
   }
 
   const supabase = await createClient();
+  // NOTE: intake_window_tokens is intentionally NOT granted to authenticated
+  // (it holds encrypted token material), so it must never be embedded in a
+  // user-client query. Its presence flag is read below via the service-role
+  // client AFTER the authorization gate above.
   const [windowsRes, submissionsRes, staffRes, groupsRes, majorsRes] =
     await Promise.all([
       supabase
         .from("intake_windows")
         .select(
-          "id, title, opens_at, closes_at, is_revoked, created_at, profiles(full_name), encrypted_token, intake_window_tokens(encrypted_token, revoked_at)"
+          "id, title, opens_at, closes_at, is_revoked, created_at, profiles(full_name), encrypted_token"
         )
         .is("deleted_at", null) // deleted intake windows disappear from the management list
         .order("created_at", { ascending: false }),
@@ -50,6 +54,26 @@ export default async function AdminIntakePage() {
     console.error("[admin/intake] intake_submissions query failed:", submissionsRes.error);
   }
 
+  // authorized service-role read: which of THESE windows has recoverable
+  // additional-token material (scoped to the ids returned above)
+  const windowIds = (windowsRes.data ?? []).map((w) => w.id as string);
+  const recoverableIds = new Set<string>();
+  if (windowIds.length > 0) {
+    const { data: tokenRows, error: tokenErr } = await createAdminClient()
+      .from("intake_window_tokens")
+      .select("intake_window_id, encrypted_token, revoked_at")
+      .in("intake_window_id", windowIds);
+    if (tokenErr) {
+      console.error("[admin/intake] intake_window_tokens query failed:", tokenErr);
+      throw new Error(`טעינת טפסי הקבלה נכשלה: ${tokenErr.message}`);
+    }
+    for (const t of tokenRows ?? []) {
+      if (t.encrypted_token && t.revoked_at === null) {
+        recoverableIds.add(t.intake_window_id as string);
+      }
+    }
+  }
+
   const windows: IntakeWindowRow[] = (windowsRes.data ?? []).map((w) => {
     const row = w as unknown as {
       id: string;
@@ -59,16 +83,12 @@ export default async function AdminIntakePage() {
       is_revoked: boolean;
       encrypted_token: string | null;
       profiles: { full_name: string | null } | null;
-      intake_window_tokens: { encrypted_token: string | null; revoked_at: string | null }[] | null;
     };
     // recoverable = the window's own encrypted token OR an active additional
     // token with encrypted material. Only the BOOLEAN reaches the browser —
     // never encrypted_token / encryption_iv / encryption_tag / plaintext.
     const hasRecoverableLink =
-      Boolean(row.encrypted_token) ||
-      (row.intake_window_tokens ?? []).some(
-        (t) => Boolean(t.encrypted_token) && t.revoked_at === null
-      );
+      Boolean(row.encrypted_token) || recoverableIds.has(row.id);
     return {
       id: row.id,
       title: row.title,

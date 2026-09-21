@@ -78,6 +78,9 @@ export default function UnifiedUpdatesFeed({
   );
   const [editingReportId, setEditingReportId] = useState<string | null>(null);
   const [deletingReportId, setDeletingReportId] = useState<string | null>(null);
+  // optimistic read state per canonical message id — flips the label
+  // immediately and rolls back if the server action fails
+  const [readOverrides, setReadOverrides] = useState<Record<string, boolean>>({});
   const [pending, startTransition] = useTransition();
 
   const filtered = useMemo(() => {
@@ -93,13 +96,18 @@ export default function UnifiedUpdatesFeed({
   }, [items, showMentor, showMaster]);
 
   function markRead(id: string, isRead: boolean) {
+    const item = items.find((i) => (i.source_id ?? i.item_id) === id);
+    const prev = readOverrides[id] ?? item?.read ?? true;
+    setReadOverrides((p) => ({ ...p, [id]: isRead }));
     startTransition(async () => {
-      if (isRead) {
-        await markMessagesReadAction({ messageIds: [id] });
+      const res = isRead
+        ? await markMessagesReadAction({ messageIds: [id] })
+        : await markMessagesUnreadAction({ messageIds: [id] });
+      if (res.ok) {
+        router.refresh();
       } else {
-        await markMessagesUnreadAction({ messageIds: [id] });
+        setReadOverrides((p) => ({ ...p, [id]: prev }));
       }
-      router.refresh();
     });
   }
 
@@ -205,10 +213,17 @@ export default function UnifiedUpdatesFeed({
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   {isMessage && (
                     <>
-                      <button type="button" onClick={() => markRead(item.source_id ?? item.item_id, !item.read)}
-                        className="rounded-full px-2.5 py-1 text-xs font-semibold text-muted hover:bg-bg">
-                        {item.read ? "סמן כלא נקרא" : "סמן כנקרא"}
-                      </button>
+                      {(() => {
+                        const canonicalId = item.source_id ?? item.item_id;
+                        const isRead = readOverrides[canonicalId] ?? item.read;
+                        return (
+                          <button type="button" onClick={() => markRead(canonicalId, !isRead)}
+                            aria-pressed={!isRead}
+                            className="rounded-full px-2.5 py-1 text-xs font-semibold text-muted hover:bg-bg">
+                            {isRead ? "סמן כלא נקרא" : "סמן כנקרא"}
+                          </button>
+                        );
+                      })()}
                       {!readOnly && (item.author_staff_id === currentStaffId || isSuperAdmin) && (
                         <MessageEditDelete
                           messageId={item.source_id ?? item.item_id}

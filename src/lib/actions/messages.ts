@@ -215,6 +215,27 @@ export async function editMessageAction(
   return { ok: true };
 }
 
+/**
+ * Server-side revalidation for every surface that lists read state:
+ * derives the student page path from student_messages itself (never trusts
+ * a client-supplied relationship).
+ */
+async function revalidateMessagePaths(
+  messageIds: string[]
+): Promise<void> {
+  const admin = createAdminClient();
+  const { data: msgs } = await admin
+    .from("student_messages")
+    .select("student_id")
+    .in("id", messageIds);
+  const studentIds = [...new Set((msgs ?? []).map((m) => m.student_id as string))];
+  revalidatePath("/updates");
+  revalidatePath("/");
+  for (const studentId of studentIds) {
+    revalidatePath(`/students/${studentId}`);
+  }
+}
+
 /** Mark specific messages as read (per-staff rows; RLS-bound to self). */
 export async function markMessagesReadAction(
   input: z.input<typeof markMessagesReadSchema>
@@ -242,8 +263,7 @@ export async function markMessagesReadAction(
     });
   if (error) return { ok: false, error: errorMessage() };
 
-  revalidatePath("/updates");
-  revalidatePath("/");
+  await revalidateMessagePaths(parsed.data.messageIds);
   return { ok: true };
 }
 
@@ -267,8 +287,7 @@ export async function markMessagesUnreadAction(
     .in("message_id", parsed.data.messageIds);
   if (error) return { ok: false, error: errorMessage() };
 
-  revalidatePath("/updates");
-  revalidatePath("/");
+  await revalidateMessagePaths(parsed.data.messageIds);
   return { ok: true };
 }
 

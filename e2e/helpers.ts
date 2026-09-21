@@ -3,6 +3,7 @@ import { expect, type Page } from "@playwright/test";
 export const SKIP = !process.env.E2E_ENABLED;
 
 export const USERS = {
+  admin: { email: "ronen@chamama.example", password: "Chamama2026!" },
   staff: { email: "tom@chamama.example", password: "Chamama2026!" },
   mentor: { email: "michal@chamama.example", password: "Chamama2026!" },
   master: { email: "naama@chamama.example", password: "Chamama2026!" },
