@@ -35,7 +35,7 @@ export default async function AppLayout({
         <ViewAsBanner staffName={viewAs.staffName ?? ""} roleContext={viewAs.roleContext ?? ""} />
       )}
       <header className="sticky top-0 z-20 border-b border-line bg-surface/95 backdrop-blur">
-        <div className="mx-auto flex h-14 w-full max-w-3xl items-center justify-between px-4">
+        <div className="mx-auto flex h-14 w-full max-w-[1600px] items-center justify-between px-4 lg:px-8">
           <Link href="/" className="flex items-center gap-2.5" aria-label={APP_NAME}>
             <Image
               src="/logo.png"
@@ -68,7 +68,9 @@ export default async function AppLayout({
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-3xl flex-1 px-4 pb-28 pt-4">
+      {/* Desktop: a wide application canvas (not a phone column). Mobile:
+          unchanged narrow flow with bottom-nav clearance. */}
+      <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 pb-28 pt-4 lg:px-8 lg:pt-6">
         {children}
       </main>
 

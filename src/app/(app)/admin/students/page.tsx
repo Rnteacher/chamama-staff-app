@@ -53,7 +53,7 @@ export default async function AdminStudentsPage() {
         <AdminActionForm
           action={upsertStudentAction}
           submitLabel="הוספה"
-          className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2"
+          className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4"
         >
           <label className="text-sm">
             שם פרטי
@@ -84,8 +84,8 @@ export default async function AdminStudentsPage() {
         </AdminActionForm>
       </section>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="font-extrabold">חניכים פעילים ({active.length})</h2>
+      <section className="flex flex-col gap-3 lg:grid lg:grid-cols-2 lg:items-start lg:gap-4">
+        <h2 className="font-extrabold lg:col-span-2">חניכים פעילים ({active.length})</h2>
         {active.map((s) => (
           <StudentAdminRow
             key={s.id}
@@ -100,8 +100,8 @@ export default async function AdminStudentsPage() {
       </section>
 
       {archived.length > 0 && (
-        <section className="flex flex-col gap-3">
-          <h2 className="font-extrabold">ארכיון ({archived.length})</h2>
+        <section className="flex flex-col gap-3 lg:grid lg:grid-cols-2 lg:items-start lg:gap-4">
+          <h2 className="font-extrabold lg:col-span-2">ארכיון ({archived.length})</h2>
           {archived.map((s) => (
             <StudentAdminRow
               key={s.id}

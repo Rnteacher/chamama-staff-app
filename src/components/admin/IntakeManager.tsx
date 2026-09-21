@@ -157,7 +157,7 @@ export default function IntakeManager({
               return (
                 <li
                   key={w.id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-bg px-3 py-2.5 text-sm"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-bg px-3 py-2.5 text-sm lg:flex-nowrap"
                 >
                   <span>
                     <span className="font-bold">{w.title}</span>
@@ -243,13 +243,13 @@ export default function IntakeManager({
             <table className="w-full min-w-[900px] text-right text-sm">
               <thead>
                 <tr className="border-b border-line text-xs text-muted">
-                  <th scope="col" className="py-2 pl-2 font-semibold">קבוצה</th>
-                  <th scope="col" className="py-2 font-semibold">חניך/ה</th>
+                  <th scope="col" className="whitespace-nowrap py-2 pl-2 font-semibold">קבוצה</th>
+                  <th scope="col" className="whitespace-nowrap py-2 font-semibold">חניך/ה</th>
                   <th scope="col" className="py-2 font-semibold">הצהרת כוונות</th>
-                  <th scope="col" className="py-2 font-semibold">מגמה</th>
-                  <th scope="col" className="py-2 font-semibold">מאסטר/ית מבוקש/ת</th>
-                  <th scope="col" className="py-2 font-semibold">מאסטר/ית שנקבע/ה</th>
-                  <th scope="col" className="py-2 pr-2 font-semibold">עודכן</th>
+                  <th scope="col" className="whitespace-nowrap py-2 font-semibold">מגמה</th>
+                  <th scope="col" className="whitespace-nowrap py-2 font-semibold">מאסטר/ית מבוקש/ת</th>
+                  <th scope="col" className="whitespace-nowrap py-2 font-semibold">מאסטר/ית שנקבע/ה</th>
+                  <th scope="col" className="whitespace-nowrap py-2 pr-2 font-semibold">עודכן</th>
                 </tr>
               </thead>
               <tbody>
@@ -395,13 +395,13 @@ function SubmissionRow({
 
   return (
     <tr className="border-b border-line/60 last:border-0 align-top">
-      <td className="py-3 pl-2 text-muted">{row.groupName ?? "—"}</td>
-      <td className="py-3 font-bold">{row.studentName}</td>
-      <td className="max-w-[260px] py-3 text-muted">{row.intentText}</td>
-      <td className="py-3 text-muted">
+      <td className="whitespace-nowrap py-3 pl-2 text-muted">{row.groupName ?? "—"}</td>
+      <td className="whitespace-nowrap py-3 font-bold">{row.studentName}</td>
+      <td className="max-w-[260px] py-3 text-muted lg:max-w-[420px]">{row.intentText}</td>
+      <td className="whitespace-nowrap py-3 text-muted">
         {row.majorName ?? <span className="font-semibold">לא במגמה</span>}
       </td>
-      <td className="py-3">
+      <td className="whitespace-nowrap py-3">
         {row.requestedMasterName}
         {row.requestedMasterId !== row.assignedMasterId && (
           <span className="mr-1 rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-bold">
@@ -455,7 +455,7 @@ function SubmissionRow({
         {saved && <p className="mt-1 text-[11px] font-bold text-brand-dark">שויך</p>}
         {error && <p role="alert" className="mt-1 text-[11px] font-bold text-danger">{error}</p>}
       </td>
-      <td className="py-3 pr-2 text-xs text-muted">
+      <td className="whitespace-nowrap py-3 pr-2 text-xs text-muted">
         {new Date(row.updatedAt).toLocaleString("he-IL")}
       </td>
     </tr>

@@ -68,7 +68,7 @@ export default function UpdatesList({ items }: { items: UpdateItem[] }) {
   const unreadCount = unreadIds.length;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-extrabold">עדכונים שלא נקראו</h1>
         {unreadCount > 0 && (

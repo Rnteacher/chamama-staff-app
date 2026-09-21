@@ -96,8 +96,8 @@ export default async function AdminOverviewPage() {
   ];
 
   return (
-    <div className="flex flex-col gap-4">
-      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+    <div className="flex flex-col gap-4 lg:gap-6">
+      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:gap-3">
         {stats.map((s) => (
           <li key={s.href}>
             <Link
@@ -113,7 +113,7 @@ export default async function AdminOverviewPage() {
 
       {isSuper && <ViewAsEntry staff={viewAsStaff} />}
 
-      <section aria-labelledby="activity-log-heading" className="rounded-2xl border border-line bg-surface p-4">
+      <section aria-labelledby="activity-log-heading" className="rounded-2xl border border-line bg-surface p-4 lg:p-5">
         <h2 id="activity-log-heading" className="font-extrabold">לוג פעילות</h2>
         <p className="mt-1 text-sm text-muted">הפעולות האחרונות במערכת, מהחדשה לישנה.</p>
         {logRows.length === 0 ? (
@@ -121,8 +121,11 @@ export default async function AdminOverviewPage() {
         ) : (
           <ul className="mt-3 flex flex-col gap-1.5 text-sm">
             {logRows.map((row, i) => (
-              <li key={i} className="flex flex-wrap items-baseline gap-x-2 border-b border-line/50 pb-1.5 last:border-0">
-                <time dateTime={row.created_at} className="shrink-0 text-xs text-muted">
+              <li
+                key={i}
+                className="flex flex-wrap items-baseline gap-x-2 border-b border-line/50 pb-1.5 last:border-0 lg:grid lg:grid-cols-[10rem_minmax(8rem,auto)_1fr_auto] lg:gap-3"
+              >
+                <time dateTime={row.created_at} className="shrink-0 text-xs text-muted lg:text-sm">
                   {new Date(row.created_at).toLocaleString("he-IL", {
                     day: "numeric",
                     month: "short",
@@ -133,7 +136,7 @@ export default async function AdminOverviewPage() {
                 <span className="font-bold">{row.actor_name ?? "מערכת"}</span>
                 <span>{ACTION_LABELS[row.action] ?? row.action}</span>
                 {row.entity_type && ENTITY_LABELS[row.entity_type] && (
-                  <span className="text-xs text-muted">· {ENTITY_LABELS[row.entity_type]}</span>
+                  <span className="text-xs text-muted lg:justify-self-start">· {ENTITY_LABELS[row.entity_type]}</span>
                 )}
               </li>
             ))}

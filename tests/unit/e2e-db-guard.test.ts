@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { classifyTestDbTarget, extractProjectRef } from "../../e2e/test-db-guard";
+import {
+  classifyTestDbTarget,
+  extractProjectRef,
+  e2eDbMutationStatus,
+} from "../../e2e/test-db-guard";
 
 /**
  * Unit tests for the fail-closed E2E DB-mutation guard:
@@ -120,6 +124,38 @@ describe("e2e DB-mutation guard (fail-closed)", () => {
     expect(extractProjectRef("http://127.0.0.1:54331")).toBeNull();
     expect(extractProjectRef(undefined)).toBeNull();
     expect(extractProjectRef("garbage")).toBeNull();
+  });
+});
+
+describe("e2eDbMutationStatus (collection-safe status, never throws, no client)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("reports BLOCKED without the opt-in — without throwing (safe for collection)", () => {
+    vi.stubEnv("E2E_SUPABASE_URL", "http://127.0.0.1:54331");
+    vi.stubEnv("ALLOW_E2E_DB_MUTATION", "");
+    const status = e2eDbMutationStatus();
+    expect(status.allowed).toBe(false);
+    expect(status.reason).toContain("ALLOW_E2E_DB_MUTATION");
+  });
+
+  it("reports ALLOWED for the local target with the explicit opt-in", () => {
+    vi.stubEnv("E2E_SUPABASE_URL", "http://127.0.0.1:54331");
+    vi.stubEnv("ALLOW_E2E_DB_MUTATION", "true");
+    const status = e2eDbMutationStatus();
+    expect(status.allowed).toBe(true);
+    expect(status.reason).toBe("local test database");
+  });
+
+  it("STILL refuses the application's configured production URL even with the opt-in", () => {
+    vi.stubEnv("E2E_SUPABASE_URL", "https://bgkqpqxeobdmbnewbljq.supabase.co");
+    vi.stubEnv("ALLOW_E2E_DB_MUTATION", "true");
+    // the guard collects production refs from the app env, too
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://bgkqpqxeobdmbnewbljq.supabase.co");
+    const status = e2eDbMutationStatus();
+    expect(status.allowed).toBe(false);
+    expect(status.reason).toContain("production");
   });
 });
 

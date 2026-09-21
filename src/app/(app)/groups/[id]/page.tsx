@@ -68,7 +68,7 @@ export default async function GroupPage({
       {students.length === 0 ? (
         <EmptyState title="הקבוצה ריקה" description="אין חניכים פעילים בקבוצה זו." />
       ) : (
-        <ul className="flex flex-col gap-2">
+        <ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2">
           {students.map((s) => (
             <StudentRow key={s.id} student={s} />
           ))}

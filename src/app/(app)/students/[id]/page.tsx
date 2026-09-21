@@ -133,8 +133,10 @@ export default async function StudentPage({
   }));
 
   return (
-    <div className="flex flex-col gap-4">
-      <header className="rounded-2xl border border-line bg-surface p-4">
+    /* Desktop: main column (feed + composer) beside a secondary column
+       (summary + recurring meetings). Mobile: original single-column flow. */
+    <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)] lg:items-start lg:gap-6">
+      <header className="order-1 rounded-2xl border border-line bg-surface p-4 lg:col-start-2 lg:row-start-1">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h1 className="text-xl font-extrabold">{student.first_name} {student.last_name}</h1>
@@ -153,7 +155,7 @@ export default async function StudentPage({
             <span className="shrink-0 rounded-full border border-warn px-2.5 py-1 text-xs font-bold text-warn">ארכיון</span>
           )}
         </div>
-        <dl className="mt-3 grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
+        <dl className="mt-3 grid grid-cols-1 gap-1 text-sm sm:grid-cols-2 lg:grid-cols-1">
           <div className="flex gap-1"><dt className="font-bold">מנטורים:</dt><dd className="text-muted">{mentorNames.length > 0 ? mentorNames.join(", ") : "—"}</dd></div>
           <div className="flex gap-1"><dt className="font-bold">מאסטרים:</dt><dd className="text-muted">{masterNames.length > 0 ? masterNames.join(", ") : "—"}</dd></div>
         </dl>
@@ -165,35 +167,39 @@ export default async function StudentPage({
         )}
       </header>
 
-      <StudentMeetingsPanel
-        studentId={student.id}
-        schedules={schedules}
-        allowedContexts={allowedContexts}
-        reportable={reportable}
-        initialOccurrenceId={meetingParam}
-        autoOpenReport={autoOpenReport}
-        isSuper={isSuper}
-      />
+      <div className="order-2 min-w-0 lg:col-start-2 lg:row-start-2">
+        <StudentMeetingsPanel
+          studentId={student.id}
+          schedules={schedules}
+          allowedContexts={allowedContexts}
+          reportable={reportable}
+          initialOccurrenceId={meetingParam}
+          autoOpenReport={autoOpenReport}
+          isSuper={isSuper}
+        />
+      </div>
 
       {/* unified updates feed: messages + meeting reports + form submissions */}
-      {feedItems.length === 0 ? (
-        <EmptyState title="אין עדכונים על החניך/ה עדיין"
-          description="היו הראשונים לשלוח עדכון — השתמשו בכפתור הירוק למטה." />
-      ) : (
-        <UnifiedUpdatesFeed
-          items={feedItems}
-          canModerate={canModerate}
-          showVisibilityStatus={canModerate || privileged}
-          focusMessageId={focusMessageId}
-          studentId={student.id}
-          canEditReports={isSuper}
-          currentStaffId={me.staffId}
-          isSuperAdmin={isSuper}
-          readOnly={viewAs.active}
-        />
-      )}
+      <div className="order-3 flex min-w-0 flex-col gap-4 lg:col-span-1 lg:col-start-1 lg:row-start-1 lg:row-span-2">
+        {feedItems.length === 0 ? (
+          <EmptyState title="אין עדכונים על החניך/ה עדיין"
+            description="היו הראשונים לשלוח עדכון — השתמשו בכפתור הירוק למטה." />
+        ) : (
+          <UnifiedUpdatesFeed
+            items={feedItems}
+            canModerate={canModerate}
+            showVisibilityStatus={canModerate || privileged}
+            focusMessageId={focusMessageId}
+            studentId={student.id}
+            canEditReports={isSuper}
+            currentStaffId={me.staffId}
+            isSuperAdmin={isSuper}
+            readOnly={viewAs.active}
+          />
+        )}
 
-      <Composer studentId={student.id} canModerate={canModerate} />
+        <Composer studentId={student.id} canModerate={canModerate} />
+      </div>
     </div>
   );
 }

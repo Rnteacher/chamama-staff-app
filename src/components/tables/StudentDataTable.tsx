@@ -233,14 +233,14 @@ export default function StudentDataTable({ title, rows, columns, readOnly }: Stu
   const hasActiveFilters = search.trim() !== "" || Object.values(filters).some(Boolean) || sortKey !== null;
 
   return (
-    <section aria-label={title} className="rounded-2xl border border-line bg-surface p-4">
+    <section aria-label={title} className="rounded-2xl border border-line bg-surface p-4 lg:p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-extrabold">{title}</h2>
         <span className="text-xs text-muted">{sorted.length} חניכים</span>
       </div>
 
-      {/* filter toolbar */}
-      <div className="mt-2 flex flex-wrap items-center gap-2">
+      {/* filter toolbar — a proper desktop toolbar row, single student search */}
+      <div className="mt-2 flex flex-wrap items-center gap-2 lg:mt-3 lg:gap-3">
         <label htmlFor={`search-${title}`} className="sr-only">חיפוש חניך</label>
         <input
           id={`search-${title}`}
@@ -248,7 +248,7 @@ export default function StudentDataTable({ title, rows, columns, readOnly }: Stu
           placeholder="חיפוש חניך…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-44 rounded-xl border border-line bg-white px-3 py-1.5 text-sm"
+          className="w-full rounded-xl border border-line bg-white px-3 py-1.5 text-sm sm:w-56 lg:w-72"
         />
         {filterDefs.map((f) => (
           <label key={f.key} className="text-xs font-semibold text-muted">
@@ -276,11 +276,11 @@ export default function StudentDataTable({ title, rows, columns, readOnly }: Stu
         <p className="mt-3 py-4 text-center text-sm text-muted">לא נמצאו חניכים מתאימים.</p>
       ) : (
         <div className="mt-3 overflow-x-auto">
-          <table className="w-full min-w-[640px] text-right text-sm">
+          <table className="w-full min-w-[760px] whitespace-nowrap text-right text-sm">
             <thead>
               <tr className="border-b border-line text-xs text-muted">
                 {cols.map((c) => (
-                  <th key={c.key} scope="col" className="py-2 pr-2 font-semibold">
+                  <th key={c.key} scope="col" className="px-2 py-2 font-semibold first:pr-0 last:pl-0">
                     {c.sortable ? (
                       <button
                         type="button"
@@ -302,7 +302,7 @@ export default function StudentDataTable({ title, rows, columns, readOnly }: Stu
               {sorted.map((r) => (
                 <tr key={r.student_id} className="border-b border-line/60 last:border-0">
                   {cols.map((c) => (
-                    <td key={c.key} className="py-2.5 pr-2">{c.render(r)}</td>
+                    <td key={c.key} className="px-2 py-2.5 first:pr-0 last:pl-0">{c.render(r)}</td>
                   ))}
                 </tr>
               ))}

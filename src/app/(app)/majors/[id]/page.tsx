@@ -65,7 +65,7 @@ export default async function MajorPage({
       {students.length === 0 ? (
         <EmptyState title="אין חניכים במגמה" description="טרם שויכו חניכים למגמה זו." />
       ) : (
-        <ul className="flex flex-col gap-2">
+        <ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2">
           {students.map((s) => (
             <StudentRow key={s.id} student={s} />
           ))}

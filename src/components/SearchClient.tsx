@@ -58,7 +58,7 @@ export default function SearchClient({
           <p aria-live="polite" className="text-sm text-muted">
             {results.length} חניכים
           </p>
-          <ul className="flex flex-col gap-2">
+          <ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2">
             {results.map((s) => (
               <StudentRow key={s.id} student={s} showGroup />
             ))}

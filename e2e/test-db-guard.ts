@@ -149,17 +149,29 @@ function collectAppProdUrls(): string[] {
 let cached: SupabaseClient | null = null;
 
 /**
- * The ONLY sanctioned way for E2E/test code to obtain a DB-mutating client.
- * Throws (fail-closed) before any insert/update/delete is possible.
+ * Collection-safe status of the mutation guard for the CURRENT environment.
+ * Reads process env only: it never creates a Supabase client and never
+ * throws, so it is safe to call while Playwright collects/tests list.
+ * Same fail-closed classification as getE2eAdminClient() (shared code below).
  */
-export function getE2eAdminClient(): SupabaseClient {
+export function e2eDbMutationStatus(): GuardResult {
   const targetUrl = process.env.E2E_SUPABASE_URL ?? "http://127.0.0.1:54331";
-  const result = classifyTestDbTarget({
+  return classifyTestDbTarget({
     targetUrl,
     allowMutation: process.env.ALLOW_E2E_DB_MUTATION,
     testProjectRef: process.env.E2E_TEST_PROJECT_REF,
     appProdUrls: collectAppProdUrls(),
   });
+}
+
+/**
+ * The ONLY sanctioned way for E2E/test code to obtain a DB-mutating client.
+ * Throws (fail-closed) before any insert/update/delete is possible. Must be
+ * called from a test lifecycle hook or test body — never at module scope.
+ */
+export function getE2eAdminClient(): SupabaseClient {
+  const targetUrl = process.env.E2E_SUPABASE_URL ?? "http://127.0.0.1:54331";
+  const result = e2eDbMutationStatus();
   if (!result.allowed) {
     throw new Error(
       `[e2e-db-guard] test DB mutation refused: ${result.reason} (target: ${targetUrl})`

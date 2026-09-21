@@ -162,11 +162,11 @@ export default async function HomePage() {
         {unreadRows.length === 0 ? (
           <EmptyState title="הכל נקרא" description="אין עדכונים חדשים. כשיתקבל עדכון רלוונטי הוא יופיע כאן." />
         ) : (
-          <ul className="flex flex-col gap-2">
+          <ul className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
             {unreadRows.map((row) => (
               <li key={row.message_id}>
                 <Link href={`/students/${row.student_id}?m=${row.message_id}`}
-                  className="flex items-start gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40">
+                  className="flex h-full items-start gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40">
                   <span aria-hidden="true" className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-dark" />
                   <span className="min-w-0 flex-1">
                     <span className="block font-bold">{row.student_first_name} {row.student_last_name}</span>

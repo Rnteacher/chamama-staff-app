@@ -58,7 +58,7 @@ export default async function GroupsPage() {
       {groups.length === 0 ? (
         <EmptyState title="אין קבוצות" description="טרם הוגדרו קבוצות במערכת." />
       ) : (
-        <ul className="flex flex-col gap-2">
+        <ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2">
           {groups.map((g) => {
             const unread = unreadByGroup.get(g.id) ?? 0;
             const mentors = mentorsByGroup.get(g.id) ?? [];

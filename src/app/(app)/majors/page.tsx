@@ -53,7 +53,7 @@ export default async function MajorsPage() {
       {majors.length === 0 ? (
         <EmptyState title="אין מגמות" description="טרם הוגדרו מגמות במערכת." />
       ) : (
-        <ul className="flex flex-col gap-2">
+        <ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2">
           {majors.map((m) => {
             const unread = unreadByMajor.get(m.id) ?? 0;
             const heads = headsByMajor.get(m.id) ?? [];

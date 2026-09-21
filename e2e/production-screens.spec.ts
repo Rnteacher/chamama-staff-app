@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
-import { SKIP, USERS, login, logout } from "./helpers";
-import { getE2eAdminClient } from "./test-db-guard";
+import { SKIP, USERS, login, logout, requireEmailAuth } from "./helpers";
+import { getE2eAdminClient, e2eDbMutationStatus } from "./test-db-guard";
 
 /**
  * Production-screen verification for the three reported failures:
@@ -13,13 +13,41 @@ import { getE2eAdminClient } from "./test-db-guard";
  */
 test.skip(SKIP, "E2E requires a running local stack (see e2e/helpers.ts)");
 
-// throws at load time unless the target is local/test AND the opt-in is set
-const admin = getE2eAdminClient();
+// ---------------------------------------------------------------------------
+// Collection-safe structure:
+//   * importing / listing this file NEVER creates a DB client and NEVER
+//     throws (no getE2eAdminClient() at module scope);
+//   * the fail-closed guard is checked in a lifecycle hook — when mutation
+//     is not opted in (or the target is not an approved local/test DB) the
+//     mutating tests SKIP with a clear reason instead of failing collection;
+//   * the client itself is created lazily, only inside a test body that
+//     actually mutates, via getE2eAdminClient() (which still re-validates
+//     fail-closed on every call).
+// ---------------------------------------------------------------------------
+let adminClient: ReturnType<typeof getE2eAdminClient> | null = null;
+
+function db(): ReturnType<typeof getE2eAdminClient> {
+  if (!adminClient) adminClient = getE2eAdminClient();
+  return adminClient;
+}
+
+test.beforeEach(async ({ page }) => {
+  const status = e2eDbMutationStatus();
+  const target = process.env.E2E_SUPABASE_URL ?? "http://127.0.0.1:54331";
+  test.skip(
+    !status.allowed,
+    `[e2e-db-guard] DB mutations unavailable: ${status.reason} (target: ${target})`
+  );
+  // these specs also sign in through the email-login flow — skip cleanly
+  // when email auth is intentionally unavailable on the app under test
+  await requireEmailAuth(page);
+});
 
 test.describe("desktop home major column", () => {
   test.use({ viewport: { width: 1366, height: 900 } });
 
   test("a student with a major shows the major NAME in the desktop table", async ({ page }) => {
+    const admin = db(); // lazy fail-closed client — only after hook skips passed
     const studentId = "44444444-4444-4444-4444-4444444444f1";
     const majorId = "d3333333-3333-3333-3333-3333333333f1";
     // seed: student (broad viewer sees all non-archived) + major + project-less fallback
@@ -52,6 +80,7 @@ test.describe("desktop home major column", () => {
 
 test.describe("project intake admin route", () => {
   test("קבלת פרויקטים opens the intake page — no crash — and renders rows", async ({ page }) => {
+    const admin = db(); // lazy fail-closed client — only after hook skips passed
     const windowId = "eeeeeeee-4444-4444-4444-444444444441";
     await admin.from("intake_windows").delete().eq("id", windowId);
     const { data: staff } = await admin.from("profiles").select("id").eq("is_active", true).limit(1);
@@ -121,6 +150,7 @@ test.describe("intake link copy", () => {
   }
 
   test("העתקת קישור copies the complete absolute URL, identically, without rotating", async ({ page }) => {
+    const admin = db(); // lazy fail-closed client — only after hook skips passed
     const W = "eeeeeeee-5555-5555-5555-555555555551";
     await admin.from("intake_windows").delete().eq("id", W);
     const { data: staff } = await admin.from("profiles").select("id").eq("is_active", true).limit(1);
@@ -184,6 +214,7 @@ test.describe("intake link copy", () => {
   });
 
   test("יצירת קישור נוסף and later העתקת קישור yield the same absolute URL; legacy link intact", async ({ page }) => {
+    const admin = db(); // lazy fail-closed client — only after hook skips passed
     const W = "eeeeeeee-6666-6666-6666-666666666661";
     const legacyHash = createHash("sha256").update("legacy-e2e-token").digest("hex");
     await admin.from("intake_windows").delete().eq("id", W);

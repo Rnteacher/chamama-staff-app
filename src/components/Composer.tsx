@@ -57,13 +57,13 @@ export default function Composer({
   return (
     <>
       <div
-        className="sticky bottom-[72px] z-10 -mx-4 px-4 pt-2"
+        className="sticky bottom-[72px] z-10 -mx-4 px-4 pt-2 lg:mx-0 lg:px-0"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         <button
           type="button"
           onClick={open}
-          className="mx-auto flex w-full max-w-md items-center justify-center gap-2 rounded-full bg-brand px-6 py-4 text-lg font-extrabold text-ink shadow-lg transition-transform active:scale-[0.98]"
+          className="mx-auto flex w-full max-w-md items-center justify-center gap-2 rounded-full bg-brand px-6 py-4 text-lg font-extrabold text-ink shadow-lg transition-transform active:scale-[0.98] lg:max-w-xl"
         >
           <SendGlyph />
           שליחת עדכון

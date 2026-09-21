@@ -45,8 +45,8 @@ export default async function AdminGroupsPage() {
         </AdminActionForm>
       </section>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="font-extrabold">קבוצות ({groups.length})</h2>
+      <section className="flex flex-col gap-3 lg:grid lg:grid-cols-2 lg:items-start lg:gap-4">
+        <h2 className="font-extrabold lg:col-span-2">קבוצות ({groups.length})</h2>
         {groups.map((g) => {
           const mentorIds = mentorsByGroup.get(g.id) ?? [];
           return (

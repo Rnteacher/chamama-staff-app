@@ -119,8 +119,8 @@ export default async function AdminStaffPage() {
         </AdminActionForm>
       </section>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="font-extrabold">ספר הצוות ({staff.length})</h2>
+      <section className="flex flex-col gap-3 lg:grid lg:grid-cols-2 lg:items-start lg:gap-4">
+        <h2 className="font-extrabold lg:col-span-2">ספר הצוות ({staff.length})</h2>
         {staff.map((s) => {
           const roles = rolesByStaff.get(s.id) ?? [];
           const linked = Boolean(s.auth_user_id);

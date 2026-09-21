@@ -45,8 +45,8 @@ export default async function AdminMajorsPage() {
         </AdminActionForm>
       </section>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="font-extrabold">מגמות ({majors.length})</h2>
+      <section className="flex flex-col gap-3 lg:grid lg:grid-cols-2 lg:items-start lg:gap-4">
+        <h2 className="font-extrabold lg:col-span-2">מגמות ({majors.length})</h2>
         {majors.map((m) => {
           const headIds = headsByMajor.get(m.id) ?? [];
           return (
