@@ -14,8 +14,8 @@ import { MeetingReportEditor } from "@/components/meetings/MeetingReportDetail";
 
 export interface FeedItem {
   item_id: string;
-  kind: "message" | "report" | "form";
-  category: "ongoing" | "project";
+  kind: "message" | "report" | "form" | "attendance";
+  category: "ongoing" | "project" | string;
   at: string;
   actor_name: string;
   title: string | null;
@@ -203,6 +203,17 @@ export default function UnifiedUpdatesFeed({
                 {/* form submission summary */}
                 {item.kind === "form" && (
                   <p className="mt-1 text-sm text-muted">{item.title}</p>
+                )}
+
+                {/* learning-group attendance exception (same unified feed) */}
+                {item.kind === "attendance" && (
+                  <p className="mt-1.5 text-[15px] font-bold leading-7 text-ink/95">
+                    <span className="mr-1.5 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-extrabold text-amber-900">
+                      נוכחות קבוצת למידה
+                    </span>
+                    {item.title}
+                    {item.body && <span className="mr-2 font-medium text-muted">{item.body}</span>}
+                  </p>
                 )}
 
                 {/* message visibility badges are not available from student_feed_items;

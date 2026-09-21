@@ -13,6 +13,11 @@ import MarkAllReadButton from "@/components/MarkStudentReadButton";
 import EmptyState from "@/components/EmptyState";
 import StudentEmploymentCard from "@/components/employment/StudentEmploymentCard";
 import type { EmploymentOverviewData } from "@/lib/employment";
+import StudentDayPlanForm from "@/components/attendance/StudentDayPlanForm";
+import { hasRole } from "@/lib/auth";
+import { jerusalemParts } from "@/lib/meetings";
+import { isoDate } from "@/lib/schedule";
+import type { EffectiveSchoolStatus } from "@/lib/attendance";
 import { getViewAsState } from "@/lib/view-as";
 
 export const metadata = { title: "חניך" };
@@ -52,7 +57,9 @@ export default async function StudentPage({
 
   if (!student) notFound();
 
-  const [mentorsRes, mastersRes, feedRes, countsRes, myMentorRes, myMasterRes, schedulesRes, reportableRes, employmentRes] =
+  const jp = jerusalemParts(new Date());
+
+  const [mentorsRes, mastersRes, feedRes, countsRes, myMentorRes, myMasterRes, schedulesRes, reportableRes, employmentRes, effectiveRes] =
     await Promise.all([
       student.group_id
         ? supabase.from("group_mentors").select("profiles(id, full_name)").eq("group_id", student.group_id)
@@ -67,6 +74,10 @@ export default async function StudentPage({
       supabase.from("meeting_schedules").select("id, staff_id, context, weekday, meeting_time, is_active, profiles(full_name)").eq("student_id", student.id).order("weekday"),
       supabase.rpc("my_reportable_occurrences", { p_student_id: student.id }),
       supabase.rpc("student_employment_overview", { p_student_id: student.id }),
+      supabase.rpc("student_effective_school_status", {
+        p_student_id: student.id,
+        p_date: isoDate(jp.year, jp.month, jp.day),
+      }),
     ]);
 
   const unreadCount = Number(
@@ -171,6 +182,22 @@ export default async function StudentPage({
       </header>
 
       <div className="order-2 min-w-0 lg:col-start-2 lg:row-start-2 flex flex-col gap-4">
+        {/* planned arrival/departure + today's effective status (secondary to
+            actual attendance; plan writes: home-group mentor|leadership|admin) */}
+        <StudentDayPlanForm
+          studentId={student.id}
+          date={isoDate(jp.year, jp.month, jp.day)}
+          studentName={`${student.first_name} ${student.last_name}`}
+          effective={
+            (effectiveRes.data ?? {}) as unknown as EffectiveSchoolStatus
+          }
+          canManage={
+            !viewAs.active &&
+            (Boolean(myMentorRes.data) ||
+              hasRole(me, "leadership") ||
+              hasRole(me, "super_admin"))
+          }
+        />
         <StudentEmploymentCard
           data={(employmentRes.data ?? {}) as unknown as EmploymentOverviewData}
           studentId={student.id}

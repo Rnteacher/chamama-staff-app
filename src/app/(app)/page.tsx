@@ -122,13 +122,64 @@ export default async function HomePage() {
   const jp = jerusalemParts(new Date());
   const todayISO = isoDate(jp.year, jp.month, jp.day);
   const scheduleStaffId = useViewAs ? viewAs.staffId! : me.staffId;
-  const [myDayRes, lgTodayRes] = await Promise.all([
+  const [myDayRes, lgTodayRes, myLgRes] = await Promise.all([
     scheduleStaffId
       ? fetchStaffDay(supabase, scheduleStaffId, todayISO)
       : Promise.resolve([]),
     supabase.rpc("learning_groups_on_weekday", { p_weekday: jp.weekday }),
+    scheduleStaffId
+      ? supabase.rpc("staff_learning_groups_on_weekday", {
+          p_staff_id: scheduleStaffId,
+          p_weekday: jp.weekday,
+        })
+      : Promise.resolve({ data: [] as never[] }),
   ]);
   const myDay = sortScheduleItems(myDayRes);
+
+  // ------------------------------------------------ נוכחות קבוצת האם -------
+  // mentors (and leadership via the overview link) get today's completion
+  // counts per writable group; ordinary staff see nothing they cannot use.
+  const isBroad = me.roles.includes("leadership") || me.roles.includes("super_admin");
+  interface MentoredGroup { id: string; name: string }
+  let attendanceGroups: MentoredGroup[] = [];
+  if (!useViewAs) {
+    if (isBroad) {
+      const { data: allGroups } = await supabase.from("greenhouse_groups").select("id, name").order("name");
+      attendanceGroups = (allGroups ?? []) as MentoredGroup[];
+    } else if (me.staffId) {
+      const { data: mentored } = await supabase
+        .from("group_mentors")
+        .select("group_id, greenhouse_groups(id, name)")
+        .eq("staff_id", me.staffId);
+      attendanceGroups = ((mentored ?? []) as unknown as Array<{
+        group_id: string; greenhouse_groups: MentoredGroup | null;
+      }>)
+        .map((r) => r.greenhouse_groups)
+        .filter((g): g is MentoredGroup => Boolean(g));
+    }
+  }
+  const attendanceCountsByGroup = new Map<
+    string,
+    { resolved: number; total: number; absent: number; late: number }
+  >();
+  await Promise.all(
+    attendanceGroups.map(async (g) => {
+      const { data } = await supabase.rpc("school_attendance_counts", {
+        p_group_id: g.id,
+        p_date: todayISO,
+      });
+      const c = (data ?? {}) as { resolved: number; total: number; absent: number; late: number };
+      attendanceCountsByGroup.set(g.id, c);
+    })
+  );
+
+  // LG sessions THIS staff member leads today (attendance entry point)
+  const myLgSessions = ((myLgRes.data ?? []) as unknown as Array<{
+    learning_group_id: string;
+    group_name: string;
+    start_time: string;
+    end_time: string;
+  }>);
   interface LgTodayRow {
     learning_group_id: string;
     group_name: string;
@@ -222,6 +273,61 @@ export default async function HomePage() {
           </ul>
         )}
       </section>
+
+      {/* -------------------------------------- נוכחות (mobile fast entry) */}
+      {!useViewAs && (attendanceGroups.length > 0 || myLgSessions.length > 0) && (
+        <section aria-labelledby="attendance-heading" className="lg:hidden">
+          <div className="mb-2 flex items-center justify-between">
+            <h2 id="attendance-heading" className="font-extrabold">
+              נוכחות היום
+            </h2>
+            {isBroad && (
+              <Link href="/attendance/overview" className="text-sm font-medium text-muted hover:text-ink">
+                סקירה ›
+              </Link>
+            )}
+          </div>
+          <ul className="flex flex-col gap-2">
+            {attendanceGroups.map((g) => {
+              const c = attendanceCountsByGroup.get(g.id);
+              return (
+                <li key={g.id}>
+                  <Link
+                    href={`/attendance?group=${g.id}`}
+                    className="flex min-h-[56px] items-center justify-between gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40"
+                  >
+                    <span className="min-w-0">
+                      <span className="block font-bold">נוכחות קבוצת האם · {g.name}</span>
+                      {c && (
+                        <span className="block truncate text-xs text-muted">
+                          {c.resolved}/{c.total} דווחו · {c.absent} חסרים · {c.late} מאחרים
+                        </span>
+                      )}
+                    </span>
+                    <span className="shrink-0 text-xs font-semibold text-muted">פתיחה ›</span>
+                  </Link>
+                </li>
+              );
+            })}
+            {myLgSessions.map((s) => (
+              <li key={`${s.learning_group_id}-${s.start_time}`}>
+                <Link
+                  href={`/groups/learning/${s.learning_group_id}/attendance`}
+                  className="flex min-h-[56px] items-center justify-between gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40"
+                >
+                  <span className="min-w-0">
+                    <span className="block font-bold">נוכחות קבוצת למידה · {s.group_name}</span>
+                    <span className="block text-xs text-muted" dir="ltr">
+                      {s.start_time.slice(0, 5)}–{s.end_time.slice(0, 5)}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-xs font-semibold text-muted">פתיחה ›</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {/* --------------------------------------- קבוצות למידה היום -------- */}
       <section aria-labelledby="lg-today-heading" className="lg:hidden">

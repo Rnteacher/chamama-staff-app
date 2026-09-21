@@ -335,5 +335,69 @@ export const workLogSchema = z
     { message: "שעות לא תקינות — הזינו התחלה וסיום או משך בלבד" }
   );
 
+// ------------------------------------------------------------ attendance ----
+
+const TIME_HM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export const attendanceStatusSchema = z.enum(["present", "absent", "late"]);
+
+/**
+ * Actual school attendance mark. Late REQUIRES an arrival time ("HH:MM",
+ * Asia/Jerusalem); any other status must NOT carry one.
+ */
+export const schoolAttendanceMarkSchema = z
+  .object({
+    studentId: uuidSchema,
+    date: z.string().regex(DATE_RE, "תאריך לא תקין"),
+    status: attendanceStatusSchema,
+    arrivalTime: z.string(), // "HH:MM" or ""
+  })
+  .refine(
+    (v) =>
+      v.status === "late"
+        ? TIME_HM_RE.test(v.arrivalTime)
+        : v.arrivalTime === "",
+    { message: "שעת הגעה נדרשת כאשר הסטטוס הוא איחור" }
+  );
+
+/**
+ * PLANNED day exception (never actual attendance): at least one of the two
+ * times must be set; the optional reason is capped at 300 chars.
+ */
+export const studentDayPlanSchema = z
+  .object({
+    studentId: uuidSchema,
+    date: z.string().regex(DATE_RE, "תאריך לא תקין"),
+    lateArrival: z.string(), // "HH:MM" or ""
+    earlyDeparture: z.string(), // "HH:MM" or ""
+    reason: z.string().trim().max(300, "ההסבר ארוך מדי (עד 300 תווים)").optional().or(z.literal("")),
+  })
+  .refine(
+    (v) =>
+      (v.lateArrival === "" || TIME_HM_RE.test(v.lateArrival)) &&
+      (v.earlyDeparture === "" || TIME_HM_RE.test(v.earlyDeparture)) &&
+      (v.lateArrival !== "" || v.earlyDeparture !== ""),
+    { message: "נדרשת שעת הגעה או שעת יציאה מתוכננת" }
+  );
+
+/** Actual Learning-Group attendance per scheduled session. */
+export const lgAttendanceSaveSchema = z
+  .object({
+    groupId: uuidSchema,
+    date: z.string().regex(DATE_RE, "תאריך לא תקין"),
+    startTime: z.string().regex(TIME_HM_RE, "שעה לא תקינה"),
+    endTime: z.string().regex(TIME_HM_RE, "שעה לא תקינה"),
+    studentId: uuidSchema,
+    status: attendanceStatusSchema,
+    arrivalTime: z.string(), // "HH:MM" or ""
+  })
+  .refine(
+    (v) =>
+      v.status === "late"
+        ? TIME_HM_RE.test(v.arrivalTime)
+        : v.arrivalTime === "",
+    { message: "שעת הגעה נדרשת כאשר הסטטוס הוא איחור" }
+  );
+
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
 export type StudentInput = z.infer<typeof studentSchema>;
