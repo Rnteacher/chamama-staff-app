@@ -11,7 +11,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
  * management, reduced-motion support, built-in review + submit states.
  */
 
-export type QuestionOption = { value: string; label: string; hint?: string };
+export type QuestionOption = {
+  value: string;
+  label: string;
+  hint?: string;
+  /** option is shown but not selectable (e.g. scheduling conflict) */
+  disabled?: boolean;
+};
 
 export interface Question {
   id: string;
@@ -282,14 +288,22 @@ export default function ConversationalForm({
                         type="button"
                         role="radio"
                         aria-checked={selected}
+                        disabled={Boolean(o.disabled)}
                         onClick={() => setValue(q.id, o.value)}
                         className={`flex min-h-[56px] items-center justify-between rounded-2xl border-2 px-4 py-3 text-right font-semibold transition-colors ${
                           selected
                             ? "border-brand-dark bg-brand-soft"
                             : "border-line bg-white hover:border-brand-dark/50"
-                        }`}
+                        } ${o.disabled ? "cursor-not-allowed opacity-50 hover:border-line" : ""}`}
                       >
-                        <span>{o.label}</span>
+                        <span className="min-w-0">
+                          <span className="block">{o.label}</span>
+                          {o.hint && (
+                            <span className="mt-0.5 block text-xs font-medium text-danger">
+                              {o.hint}
+                            </span>
+                          )}
+                        </span>
                         {selected && <CheckGlyph />}
                       </button>
                     );
@@ -307,14 +321,22 @@ export default function ConversationalForm({
                         key={o.value}
                         type="button"
                         aria-pressed={selected}
+                        disabled={Boolean(o.disabled)}
                         onClick={() => toggleMulti(q.id, o.value)}
                         className={`flex min-h-[56px] items-center justify-between rounded-2xl border-2 px-4 py-3 text-right font-semibold transition-colors ${
                           selected
                             ? "border-brand-dark bg-brand-soft"
                             : "border-line bg-white hover:border-brand-dark/50"
-                        }`}
+                        } ${o.disabled && !selected ? "cursor-not-allowed opacity-50 hover:border-line" : ""}`}
                       >
-                        <span>{o.label}</span>
+                        <span className="min-w-0">
+                          <span className="block">{o.label}</span>
+                          {o.hint && (
+                            <span className="mt-0.5 block text-xs font-medium text-danger">
+                              {o.hint}
+                            </span>
+                          )}
+                        </span>
                         {selected && <CheckGlyph />}
                       </button>
                     );

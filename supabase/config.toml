@@ -1,0 +1,39 @@
+# Local Supabase stack for chamama-staff-app.
+# Non-default ports so it can run alongside other local supabase projects
+# that occupy the default 5432x range.
+project_id = "chamama-staff-app"
+
+[api]
+enabled = true
+port = 54341
+
+[db]
+port = 54342
+major_version = 15
+
+[studio]
+enabled = true
+port = 54343
+
+[inbucket]
+enabled = true
+port = 54344
+
+[analytics]
+enabled = false
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["https://localhost:3000"]
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = false
+
+[auth.external.google]
+enabled = false

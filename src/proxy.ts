@@ -70,6 +70,10 @@ export async function proxy(request: NextRequest) {
     if (PUBLIC_PATHS.has(pathname) || pathname.startsWith("/intake/")) {
       return response;
     }
+    // public learning-group registration links (token-gated RPCs; no login)
+    if (pathname.startsWith("/lg-registration/")) {
+      return response;
+    }
     const loginUrl = new URL("/login", request.url);
     if (pathname !== "/") loginUrl.searchParams.set("next", pathname);
     return NextResponse.redirect(loginUrl);

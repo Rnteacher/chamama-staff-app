@@ -1,4 +1,4 @@
-﻿-- ============================================================================
+-- ============================================================================
 -- Seed: fictional development data for תיכון החממה staff app.
 --
 -- ALL people/students are FICTIONAL. No real school data.
@@ -199,6 +199,73 @@ insert into public.message_reads (staff_id, message_id, read_at) values
 insert into public.app_settings (key, value) values
   ('include_student_name_in_push', 'false'::jsonb)
 on conflict (key) do nothing;
+
+-- ------------------------------------------------------ learning groups -----
+-- Fictional learning groups + weekly slots (Asia/Jerusalem wall clock).
+-- קבוצת צילום (יום א׳ 16:00–17:30 + יום ב׳ 16:00–17:30) and
+-- קבוצת רובוטיקה (יום ב׳ 16:00–17:30) deliberately CONFLICT on Monday —
+-- used by e2e/tests to verify conflict prevention. Touching-slot pair
+-- (יום ד׳ 10:00–11:00 + יום ד׳ 11:00–12:00) proves boundaries are allowed.
+delete from public.learning_groups
+ where id between '66666666-6666-6666-6666-666666666601'
+              and '66666666-6666-6666-6666-66666666660f';
+delete from public.learning_group_registration_windows
+ where id between '66666666-6666-6666-6666-666666666611'
+              and '66666666-6666-6666-6666-66666666661f';
+
+insert into public.learning_groups (id, name, description, is_active, created_by_staff_id) values
+  ('66666666-6666-6666-6666-666666666601', 'קבוצת צילום',    'מפגשי צילום ותיעוד אירועי התיכון', true,  '11111111-1111-1111-1111-111111111101'),
+  ('66666666-6666-6666-6666-666666666602', 'קבוצת רובוטיקה', 'חממת רובוטיקה ותכנות',            true,  '11111111-1111-1111-1111-111111111101'),
+  ('66666666-6666-6666-6666-666666666603', 'קבוצת מוזיקה',   null,                              true,  '11111111-1111-1111-1111-111111111101'),
+  ('66666666-6666-6666-6666-666666666604', 'קבוצת ניו-מדיה', 'לא פעילה בסמסטר זה',              false, '11111111-1111-1111-1111-111111111101');
+
+insert into public.learning_group_weekly_slots (learning_group_id, weekday, start_time, end_time) values
+  -- צילום: יום א׳ 16:00–17:30 ויום ב׳ 16:00–17:30 (multi-slot group)
+  ('66666666-6666-6666-6666-666666666601', 0, '16:00', '17:30'),
+  ('66666666-6666-6666-6666-666666666601', 1, '16:00', '17:30'),
+  -- רובוטיקה: יום ב׳ 16:00–17:30 — conflicts with צילום's Monday slot
+  ('66666666-6666-6666-6666-666666666602', 1, '16:00', '17:30'),
+  -- מוזיקה: touching slots on יום ד׳ (10:00–11:00 + 11:00–12:00 are valid together)
+  ('66666666-6666-6666-6666-666666666603', 3, '10:00', '11:00'),
+  ('66666666-6666-6666-6666-666666666603', 3, '11:00', '12:00'),
+  -- ניו-מדיה: יום ה׳ 18:00–19:00 (inactive group)
+  ('66666666-6666-6666-6666-666666666604', 4, '18:00', '19:00');
+
+insert into public.learning_group_staff_leaders (learning_group_id, staff_id) values
+  ('66666666-6666-6666-6666-666666666601', '11111111-1111-1111-1111-111111111102'), -- מיכל מובילה צילום
+  ('66666666-6666-6666-6666-666666666602', '11111111-1111-1111-1111-111111111103'), -- יואב מוביל רובוטיקה
+  ('66666666-6666-6666-6666-666666666601', '11111111-1111-1111-1111-111111111109'); -- ליאת (הנהלה) מובילה גם צילום
+
+insert into public.learning_group_student_leaders (learning_group_id, student_id) values
+  ('66666666-6666-6666-6666-666666666601', '44444444-4444-4444-4444-444444444401'), -- נועם מוביל צילום
+  ('66666666-6666-6666-6666-666666666603', '44444444-4444-4444-4444-444444444402'); -- טליה מובילה מוזיקה
+
+-- manual memberships (provenance matters: registration resubmission must
+-- never remove these)
+insert into public.learning_group_memberships (learning_group_id, student_id, source, added_by_staff_id) values
+  ('66666666-6666-6666-6666-666666666601', '44444444-4444-4444-4444-444444444401', 'manual', '11111111-1111-1111-1111-111111111102'), -- נועם → צילום
+  ('66666666-6666-6666-6666-666666666602', '44444444-4444-4444-4444-444444444405', 'manual', '11111111-1111-1111-1111-111111111103'); -- ליאו → רובוטיקה
+
+-- a manual membership that ENDED (history is preserved, not destroyed)
+insert into public.learning_group_memberships (learning_group_id, student_id, source, added_by_staff_id, joined_at, ended_at) values
+  ('66666666-6666-6666-6666-666666666603', '44444444-4444-4444-4444-444444444403', 'manual', '11111111-1111-1111-1111-111111111101', now() - interval '60 days', now() - interval '10 days'); -- עומר סיים מוזיקה
+
+-- public registration window (dev token: 'dev-lg-token' — hash only, no
+-- encrypted copy, so the Copy-Link button is hidden for this seeded window)
+insert into public.learning_group_registration_windows
+  (id, title, token_hash, opens_at, closes_at, created_by_staff_id)
+values
+  ('66666666-6666-6666-6666-666666666611',
+   'הרשמה לקבוצות למידה — סמסטר א׳',
+   encode(sha256(convert_to('dev-lg-token', 'UTF8')), 'hex'),
+   now() - interval '1 day',
+   now() + interval '30 days',
+   '11111111-1111-1111-1111-111111111101');
+
+insert into public.learning_group_registration_window_groups (registration_window_id, learning_group_id) values
+  ('66666666-6666-6666-6666-666666666611', '66666666-6666-6666-6666-666666666601'),
+  ('66666666-6666-6666-6666-666666666611', '66666666-6666-6666-6666-666666666602'),
+  ('66666666-6666-6666-6666-666666666611', '66666666-6666-6666-6666-666666666603');
 
 -- -------------------------------------------------------------- audit -------
 insert into public.audit_logs (actor_staff_id, action, entity_type, entity_id, metadata)

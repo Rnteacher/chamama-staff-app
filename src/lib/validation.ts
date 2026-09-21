@@ -104,6 +104,60 @@ export const groupSchema = z.object({
   name: z.string().trim().min(1, "חסר שם קבוצה").max(80),
 });
 
+// ------------------------------------------------------ learning groups ----
+
+export const learningGroupSlotSchema = z
+  .object({
+    weekday: z
+      .number()
+      .int()
+      .min(0, "יום בשבוע לא תקין")
+      .max(6, "יום בשבוע לא תקין"),
+    startTime: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "שעה לא תקינה (HH:MM)"),
+    endTime: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "שעה לא תקינה (HH:MM)"),
+  })
+  .refine((s) => s.startTime < s.endTime, {
+    message: "שעת הסיום חייבת להיות אחרי שעת ההתחלה",
+  });
+
+export const learningGroupSchema = z
+  .object({
+    id: uuidSchema.optional(),
+    name: z.string().trim().min(1, "חסר שם קבוצה").max(120),
+    description: z.string().trim().max(500).optional().or(z.literal("")),
+    isActive: z.boolean().default(true),
+    slots: z.array(learningGroupSlotSchema).min(1, "נדרש לפחות יום ושעת מפגש אחדים").max(30),
+    staffLeaderIds: z.array(uuidSchema).max(50).default([]),
+    studentLeaderIds: z.array(uuidSchema).max(50).default([]),
+  })
+  .refine(
+    (v) => {
+      const seen = new Set(
+        v.slots.map((s) => `${s.weekday}|${s.startTime}|${s.endTime}`)
+      );
+      return seen.size === v.slots.length;
+    },
+    { message: "אותו מפגש הוגדר פעמיים" }
+  );
+
+export const learningGroupWindowSchema = z
+  .object({
+    title: z.string().trim().min(1, "חסרה כותרת").max(120),
+    opensAt: z.string().min(1, "חסר זמן פתיחה"),
+    closesAt: z.string().min(1, "חסר זמן סגירה"),
+    learningGroupIds: z
+      .array(uuidSchema)
+      .min(1, "בחרו לפחות קבוצת למידה אחת להרשמה"),
+  })
+  .refine((v) => new Date(v.opensAt) < new Date(v.closesAt), {
+    message: "שעת הפתיחה חייבת להיות לפני שעת הסגירה",
+    path: ["closesAt"],
+  });
+
 export const majorSchema = z.object({
   id: uuidSchema.optional(),
   name: z.string().trim().min(1, "חסר שם מגמה").max(80),
