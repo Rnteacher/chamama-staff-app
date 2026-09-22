@@ -35,16 +35,11 @@ export default function StudentEmploymentCard({
       </div>
 
       {!data.eligible ? (
-        data.school_year === null ? (
-          <p className="mt-2 text-sm text-warn">
-            שנת הלימודים טרם הוגדרה — ההנהלה צריכה להגדיר אותה כדי לאפשר שיבוץ
-            לעבודה (רלוונטי לשכבות ב/ג/ד).
-          </p>
-        ) : (
-          <p className="mt-2 text-sm text-muted">
-            הדרישה התעסוקתית רלוונטית לשכבות ב/ג/ד בלבד.
-          </p>
-        )
+        <p className="mt-2 text-sm text-muted">
+          {data.cohort_note
+            ? `${data.cohort_note}.`
+            : "החניך/ה נמצא/ת בקבוצת השנתון הצעירה — התוכנית התעסוקתית תחול בשנתון הבא."}
+        </p>
       ) : !data.placement ? (
         <p className="mt-2 text-sm text-muted">אין שיבוץ לעבודה.</p>
       ) : (

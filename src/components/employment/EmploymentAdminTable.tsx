@@ -1,18 +1,17 @@
 "use client";
 
-import { Fragment, useActionState, useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import Link from "next/link";
-import {
-  computeEmploymentProgress,
-  schoolYearLabel,
-} from "@/lib/employment";
-import { setStudentSchoolYearAction } from "@/lib/actions/employment";
+import { computeEmploymentProgress } from "@/lib/employment";
 
 export interface EmploymentRow {
   studentId: string;
   studentName: string;
   groupName: string | null;
-  schoolYear: number | null;
+  /** canonical cohort eligibility (youngest active cohort = false) */
+  employmentEligible: boolean;
+  /** youngest-cohort note or invalid-group-name warning */
+  cohortNote: string | null;
   placementId: string | null;
   workplaceName: string | null;
   placementActive: boolean | null;
@@ -26,22 +25,22 @@ type StatusFilter = "all" | "active" | "ended" | "none";
 
 /**
  * Employment management table — desktop-wide (not a narrow card), with a
- * compact mobile list. Filters: group / year / workplace / status / progress.
- * Students whose year was never set (school_year NULL — the state of every
- * pre-existing student) are SURFACED with "שנה לא הוגדרה", never hidden;
- * leadership/super_admin can set the year inline.
+ * compact mobile list. Filters: group / workplace / status / progress.
+ * Eligibility is DERIVED from the home-group cohort order (canonical SQL) —
+ * no per-student year is required or shown. The youngest active cohort is
+ * surfaced with a note, not hidden.
  */
 export default function EmploymentAdminTable({
   rows,
   groups,
-  canSetYear = false,
+  cohortWarnings,
 }: {
   rows: EmploymentRow[];
   groups: { id: string; name: string }[];
-  canSetYear?: boolean;
+  /** administrative warnings for current groups with unrecognizable names */
+  cohortWarnings: string[];
 }) {
   const [group, setGroup] = useState("");
-  const [year, setYear] = useState("");
   const [workplace, setWorkplace] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [bucket, setBucket] = useState<BucketFilter>("all");
@@ -51,8 +50,6 @@ export default function EmploymentAdminTable({
     const wp = workplace.trim().toLowerCase();
     return rows.filter((r) => {
       if (group && r.groupName !== groups.find((g) => g.id === group)?.name) return false;
-      if (year === "0" && r.schoolYear !== null) return false;
-      if (year && year !== "0" && String(r.schoolYear ?? "") !== year) return false;
       if (wp && !(r.workplaceName ?? "").toLowerCase().includes(wp)) return false;
       if (name && !r.studentName.includes(name.trim())) return false;
       const b = computeEmploymentProgress(r.totalMinutes).bucket;
@@ -62,12 +59,21 @@ export default function EmploymentAdminTable({
       if (status === "none" && r.placementId) return false;
       return true;
     });
-  }, [rows, groups, group, year, workplace, status, bucket, name]);
-
-  const missingYearCount = rows.filter((r) => r.schoolYear === null).length;
+  }, [rows, groups, group, workplace, status, bucket, name]);
 
   return (
     <div className="flex flex-col gap-3">
+      {cohortWarnings.length > 0 && (
+        <div role="alert" className="rounded-2xl border border-warn bg-amber-50 p-3 text-sm">
+          {cohortWarnings.map((w) => (
+            <p key={w} className="font-bold text-warn">⚠ {w}</p>
+          ))}
+          <p className="mt-1 text-xs text-muted">
+            קבוצה בשם שאינו מתחיל באות השנתון (א׳–ת׳) לא נכללת בחישוב סדר השנתון.
+          </p>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-end gap-2 rounded-2xl border border-line bg-surface p-3">
         <label className="text-xs font-semibold">
           חניך/ה
@@ -89,20 +95,6 @@ export default function EmploymentAdminTable({
             {groups.map((g) => (
               <option key={g.id} value={g.id}>{g.name}</option>
             ))}
-          </select>
-        </label>
-        <label className="text-xs font-semibold">
-          שכבה
-          <select
-            value={year}
-            onChange={(e) => setYear(e.target.value)}
-            className="mr-1 rounded-lg border border-line bg-white px-2 py-1.5 text-sm"
-          >
-            <option value="">הכל</option>
-            <option value="0">לא הוגדרה{missingYearCount > 0 ? ` (${missingYearCount})` : ""}</option>
-            <option value="2">ב</option>
-            <option value="3">ג</option>
-            <option value="4">ד</option>
           </select>
         </label>
         <label className="text-xs font-semibold">
@@ -150,7 +142,7 @@ export default function EmploymentAdminTable({
             <tr className="border-b border-line text-right text-xs text-muted">
               <th className="px-3 py-2.5 font-bold">חניך/ה</th>
               <th className="px-3 py-2.5 font-bold">קבוצת אם</th>
-              <th className="px-3 py-2.5 font-bold">שכבה</th>
+              <th className="px-3 py-2.5 font-bold">זכאות</th>
               <th className="px-3 py-2.5 font-bold">מקום עבודה</th>
               <th className="px-3 py-2.5 font-bold">ימי עבודה</th>
               <th className="px-3 py-2.5 font-bold">שעות שנצברו</th>
@@ -178,15 +170,22 @@ export default function EmploymentAdminTable({
                     </td>
                     <td className="px-3 py-2.5 text-muted">{r.groupName ?? "—"}</td>
                     <td className="px-3 py-2.5">
-                      {r.schoolYear === null ? (
+                      {r.cohortNote ? (
                         <span
-                          data-year-missing="true"
-                          className="inline-block rounded-full border border-warn bg-amber-50 px-2 py-0.5 text-xs font-bold text-warn"
+                          data-cohort-note="true"
+                          className="inline-block rounded-full border border-line bg-bg px-2 py-0.5 text-xs font-bold text-muted"
+                          title={r.cohortNote}
                         >
-                          שנה לא הוגדרה
+                          {r.employmentEligible ? "כן · לתשומת לב" : "לא · שנתון צעיר"}
+                        </span>
+                      ) : r.employmentEligible ? (
+                        <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs font-bold text-emerald-900">
+                          כן
                         </span>
                       ) : (
-                        schoolYearLabel(r.schoolYear)
+                        <span className="rounded-full border border-line bg-bg px-2 py-0.5 text-xs font-bold text-muted">
+                          לא
+                        </span>
                       )}
                     </td>
                     <td className="px-3 py-2.5">
@@ -221,13 +220,6 @@ export default function EmploymentAdminTable({
                       )}
                     </td>
                   </tr>
-                  {r.schoolYear === null && canSetYear && (
-                    <tr className="border-b border-line/50 bg-amber-50/60 last:border-0">
-                      <td colSpan={8} className="px-3 py-2">
-                        <YearSetterForm studentId={r.studentId} studentName={r.studentName} />
-                      </td>
-                    </tr>
-                  )}
                   </Fragment>
                 );
               })
@@ -254,11 +246,9 @@ export default function EmploymentAdminTable({
                   <span className="flex items-center justify-between gap-2">
                     <span className="font-bold">{r.studentName}</span>
                     <span className="text-xs text-muted">
-                      {r.schoolYear === null ? (
-                        <span className="font-bold text-warn">שנה לא הוגדרה</span>
-                      ) : (
-                        schoolYearLabel(r.schoolYear)
-                      )}
+                      <span className={r.employmentEligible ? "font-bold" : "font-bold text-warn"}>
+                        {r.employmentEligible ? "זכאי/ת" : "שנתון צעיר"}
+                      </span>
                       {" · "}
                       {r.groupName ?? "—"}
                     </span>
@@ -280,47 +270,5 @@ export default function EmploymentAdminTable({
         )}
       </ul>
     </div>
-  );
-}
-
-/**
- * Inline year setter — leadership/super_admin only (the server action and the
- * RPC both enforce this). Setting the year makes the student employment-
- * eligible (ב/ג/ד); "—" clears the year again.
- */
-function YearSetterForm({ studentId, studentName }: { studentId: string; studentName: string }) {
-  const [state, formAction, pending] = useActionState(setStudentSchoolYearAction, null);
-  return (
-    <form action={formAction} className="flex flex-wrap items-center gap-2 text-xs">
-      <input type="hidden" name="studentId" value={studentId} />
-      <span className="font-bold text-warn">שנה לא הוגדרה — {studentName}:</span>
-      <label className="sr-only" htmlFor={`year-${studentId}`}>שנת לימודים</label>
-      <select
-        id={`year-${studentId}`}
-        name="schoolYear"
-        defaultValue=""
-        className="rounded-lg border border-line bg-white px-2 py-1 text-xs"
-      >
-        <option value="">בחרו שנה…</option>
-        <option value="1">א</option>
-        <option value="2">ב</option>
-        <option value="3">ג</option>
-        <option value="4">ד</option>
-        <option value="clear">— ניקוי —</option>
-      </select>
-      <button
-        type="submit"
-        disabled={pending}
-        className="rounded-full bg-ink px-3 py-1 text-xs font-bold text-white disabled:opacity-60"
-      >
-        {pending ? "שומרים…" : "שמירת שנה"}
-      </button>
-      {state && !state.ok && (
-        <span role="alert" className="font-semibold text-danger">{state.error}</span>
-      )}
-      {state?.ok && (
-        <span role="status" className="font-semibold text-brand-dark">השנה נשמרה</span>
-      )}
-    </form>
   );
 }

@@ -48,6 +48,115 @@ function revalidateAttendance(studentId?: string | null, groupId?: string | null
 
 // ------------------------------------------------------- school attendance --
 
+/**
+ * FAST per-mark mutation for the optimistic attendance UI: NO
+ * revalidatePath/refresh round-trip in the critical interaction loop. The UI
+ * advances immediately from local state and persists in the background;
+ * authorization stays inside the RPC and View-As stays blocked.
+ */
+export async function markSchoolAttendanceFastAction(input: {
+  studentId: string;
+  date: string;
+  status: "present" | "absent" | "late";
+  arrivalTime?: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const me = await requireMe();
+    if (!me.staffId) return { ok: false, error: "אין הרשאה לרישום נוכחות" };
+    if (!(await assertNotViewAs())) return { ok: false, error: "לא זמין במצב צפייה" };
+
+    const parsed = schoolAttendanceMarkSchema.safeParse({
+      studentId: input.studentId,
+      date: input.date,
+      status: input.status,
+      arrivalTime: (input.arrivalTime ?? "").slice(0, 5),
+    });
+    if (!parsed.success) {
+      return { ok: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
+    }
+    const p = parsed.data;
+
+    const supabase = await createClient();
+    const { error } = await supabase.rpc("school_attendance_mark", {
+      p_student_id: p.studentId,
+      p_date: p.date,
+      p_status: p.status,
+      p_arrival_time: p.status === "late" ? `${p.arrivalTime}:00` : null,
+    });
+    if (error) return { ok: false, error: errMessage(error.message) };
+    return { ok: true };
+  } catch (err) {
+    if (err && typeof err === "object" && "digest" in err) throw err;
+    return { ok: false, error: "הפעולה נכשלה. נסו שוב." };
+  }
+}
+
+/**
+ * FAST LG per-mark mutation for the optimistic LG UI (no route refresh in the
+ * interaction loop). The idempotent alert side effects + mentor push still
+ * run server-side; revalidation happens when the UI queue drains.
+ */
+export async function saveLearningGroupAttendanceFastAction(input: {
+  groupId: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  studentId: string;
+  status: "present" | "absent" | "late";
+  arrivalTime?: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const me = await requireMe();
+    if (!me.staffId) return { ok: false, error: "אין הרשאה לרישום נוכחות" };
+    if (!(await assertNotViewAs())) return { ok: false, error: "לא זמין במצב צפייה" };
+
+    const parsed = lgAttendanceSaveSchema.safeParse({
+      groupId: input.groupId,
+      date: input.date,
+      startTime: input.startTime.slice(0, 5),
+      endTime: input.endTime.slice(0, 5),
+      studentId: input.studentId,
+      status: input.status,
+      arrivalTime: (input.arrivalTime ?? "").slice(0, 5),
+    });
+    if (!parsed.success) {
+      return { ok: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
+    }
+    const p = parsed.data;
+
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("learning_group_attendance_save", {
+      p_group_id: p.groupId,
+      p_session_date: p.date,
+      p_start_time: `${p.startTime}:00`,
+      p_end_time: `${p.endTime}:00`,
+      p_student_id: p.studentId,
+      p_status: p.status,
+      p_arrival_time: p.status === "late" ? `${p.arrivalTime}:00` : null,
+    });
+    if (error) return { ok: false, error: errMessage(error.message) };
+
+    const res = (data ?? {}) as {
+      alert_created?: boolean;
+      alert_type?: string | null;
+      mentor_ids?: string[];
+    };
+
+    if (
+      res.alert_created &&
+      (res.alert_type === "absent" || res.alert_type === "late") &&
+      (res.mentor_ids ?? []).length > 0
+    ) {
+      await sendLgAlertPush(p.studentId, p.groupId, res.alert_type, p.arrivalTime, res.mentor_ids!)
+        .catch(() => undefined);
+    }
+    return { ok: true };
+  } catch (err) {
+    if (err && typeof err === "object" && "digest" in err) throw err;
+    return { ok: false, error: "הפעולה נכשלה. נסו שוב." };
+  }
+}
+
 export async function markSchoolAttendanceAction(
   _prev: ActionState | null,
   fd: FormData

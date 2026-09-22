@@ -1,17 +1,16 @@
-﻿"use client";
+"use client";
 
 import { useActionState, useState } from "react";
 import {
   upsertEmploymentPlacementAction,
   endEmploymentPlacementAction,
 } from "@/lib/actions/employment";
-import { formatWorkSlotsHe, schoolYearLabel } from "@/lib/employment";
+import { formatWorkSlotsHe } from "@/lib/employment";
 import { WEEKDAY_NAMES_HE } from "@/lib/schedule";
 
 export interface PlacementEditorData {
   studentId: string;
   studentName: string;
-  schoolYear: number | null;
   placement: {
     id: string;
     workplace_name: string;
@@ -24,6 +23,8 @@ export interface PlacementEditorData {
   } | null;
   weeklySlots: { weekday: number; start_time: string; end_time: string }[];
   eligible: boolean;
+  /** youngest-cohort note or invalid-group-name warning (canonical SQL) */
+  cohortNote: string | null;
 }
 
 interface SlotDraft {
@@ -109,17 +110,11 @@ export default function PlacementEditor({
     return (
       <section className="rounded-2xl border border-line bg-surface p-4">
         <h2 className="font-extrabold">שיבוץ לעבודה</h2>
-        {data.schoolYear === null ? (
-          <p className="mt-2 text-sm text-warn">
-            שנת הלימודים לא הוגדרה. יש להגדיר את שנת הלימודים (הנהלה/מנהל מערכת)
-            כדי לשבץ לעבודה — רלוונטי לשכבות ב/ג/ד בלבד.
-          </p>
-        ) : (
-          <p className="mt-2 text-sm text-muted">
-            ניתן לשבץ לעבודה רק חניכים בשכבות ב/ג/ד. שכבת החניך/ה:{" "}
-            {schoolYearLabel(data.schoolYear)}.
-          </p>
-        )}
+        <p className="mt-2 text-sm text-muted">
+          {data.cohortNote
+            ? `${data.cohortNote}. לא ניתן לשבץ לעבודה.`
+            : "ניתן לשבץ לעבודה רק חניכים משנתונים פעילים שאינם הצעיר שבהם. הזכאות נגזרת אוטומטית מסדר השנתון של קבוצת האם."}
+        </p>
       </section>
     );
   }

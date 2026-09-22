@@ -3,11 +3,14 @@ import { requireMe, hasRole } from "@/lib/auth";
 import { getViewAsState } from "@/lib/view-as";
 import { createClient } from "@/lib/supabase/server";
 import EmptyState from "@/components/EmptyState";
+import Link from "next/link";
 import {
   LearningGroupMemberPicker,
   LearningGroupMemberRemoveButton,
 } from "@/components/learning-groups/LearningGroupMemberPicker";
 import { formatWeeklySlotsHe, normalizeTime, type WeeklySlot } from "@/lib/schedule";
+import { isoDate } from "@/lib/schedule";
+import { jerusalemParts } from "@/lib/meetings";
 
 export const metadata = { title: "קבוצת למידה" };
 
@@ -66,6 +69,9 @@ export default async function LearningGroupPage({
     };
     return { weekday: row.weekday, startTime: normalizeTime(row.start_time), endTime: normalizeTime(row.end_time) };
   });
+
+  const jp = jerusalemParts(new Date());
+  const todayISO = isoDate(jp.year, jp.month, jp.day);
 
   const staffLeaders = (staffRes.data ?? [])
     .map((l) => {
@@ -134,6 +140,15 @@ export default async function LearningGroupPage({
           </div>
           {group.description && (
             <p className="mt-1 text-sm text-muted">{group.description}</p>
+          )}
+          {/* direct attendance entry for the group's staff leaders */}
+          {canManage && (
+            <Link
+              href={`/groups/learning/${group.id}/attendance?date=${todayISO}`}
+              className="mt-3 inline-flex min-h-[44px] items-center rounded-full border-2 border-brand-dark bg-brand-soft px-5 font-extrabold text-ink hover:bg-brand-soft/70"
+            >
+              נוכחות
+            </Link>
           )}
         </header>
 

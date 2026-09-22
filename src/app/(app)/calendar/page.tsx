@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { requireMe, hasRole } from "@/lib/auth";
 import { getViewAsState } from "@/lib/view-as";
 import { createClient } from "@/lib/supabase/server";
@@ -5,6 +6,7 @@ import { fetchCalendarRange } from "@/lib/calendar";
 import { jerusalemParts } from "@/lib/meetings";
 import { isoDate } from "@/lib/schedule";
 import AnnualCalendar from "@/components/calendar/AnnualCalendar";
+import CalendarCsvImport from "@/components/calendar/CalendarCsvImport";
 import type { MultiSelectOption } from "@/components/learning-groups/MultiSelectCheckbox";
 
 export const metadata = { title: "לוח שנה" };
@@ -49,6 +51,15 @@ export default async function CalendarPage({
   searchParams,
 }: PageProps<"/calendar">) {
   const me = await requireMe();
+  // SERVER-SIDE route security: full calendar management (views, add/edit/
+  // delete/cancel, CSV import) is leadership/super_admin ONLY. Direct URL
+  // access by ordinary staff is denied — not merely hidden from navigation.
+  // (Events still reach ordinary staff through staff_day_schedule / היום שלי.)
+  // View-As: the real viewer must be calendar-admin; mutations stay blocked
+  // (canManage=false in View-As below).
+  if (!hasRole(me, "leadership") && !hasRole(me, "super_admin")) {
+    redirect("/access-denied");
+  }
   const viewAs = await getViewAsState();
   const supabase = await createClient();
 
@@ -128,26 +139,30 @@ export default async function CalendarPage({
   }
 
   return (
-    <AnnualCalendar
-      occurrences={occurrences}
-      events={(rawEvents.data ?? []) as unknown as RawCalendarEvent[]}
-      audiences={
-        (rawAudiences.data ?? []) as unknown as {
-          event_id: string;
-          audience_type: "everyone" | "staff_only" | "home_group" | "major" | "learning_group" | "staff_member";
-          greenhouse_group_id: string | null;
-          major_id: string | null;
-          learning_group_id: string | null;
-          staff_id: string | null;
-        }[]
-      }
-      months={range.months}
-      yearLabel={range.label}
-      todayISO={todayISO}
-      canManage={canManage}
-      editorData={editorData}
-      initialDate={initialDate}
-      initialEventId={initialEventId}
-    />
+    <div className="flex flex-col gap-5">
+      <AnnualCalendar
+        occurrences={occurrences}
+        events={(rawEvents.data ?? []) as unknown as RawCalendarEvent[]}
+        audiences={
+          (rawAudiences.data ?? []) as unknown as {
+            event_id: string;
+            audience_type: "everyone" | "staff_only" | "home_group" | "major" | "learning_group" | "staff_member";
+            greenhouse_group_id: string | null;
+            major_id: string | null;
+            learning_group_id: string | null;
+            staff_id: string | null;
+          }[]
+        }
+        months={range.months}
+        yearLabel={range.label}
+        todayISO={todayISO}
+        canManage={canManage}
+        editorData={editorData}
+        initialDate={initialDate}
+        initialEventId={initialEventId}
+      />
+      {/* CSV import — same leadership/super_admin guard as the whole screen */}
+      {canManage && <CalendarCsvImport />}
+    </div>
   );
 }

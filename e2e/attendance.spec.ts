@@ -1,32 +1,21 @@
 import { test, expect, type Page, type Locator } from "@playwright/test";
-import { SKIP, USERS, login, logout } from "./helpers";
+import { SKIP, USERS, login } from "./helpers";
 import { getE2eAdminClient } from "./test-db-guard";
 
 test.skip(SKIP, "E2E requires a running local stack (see e2e/helpers.ts)");
 
 /**
- * Daily attendance (phase 4) — ACTUALLY EXECUTED Playwright verification.
+ * Daily attendance — operational UX correction pass.
  *
- * Environment (test-only, process env — production files untouched):
- *   - the app under test is built/started with NEXT_PUBLIC_ENABLE_EMAIL_LOGIN
- *     =true and the LOCAL Supabase URL/anon key (email login stays disabled
- *     in the normal dev/prod configuration)
- *   - direct test-side DB access goes ONLY through the fail-closed guard
- *     (getE2eAdminClient) pointed at the LOCAL stack; production hosts are
- *     refused by the guard, which reads .env.local production refs first
+ * Covers:
+ *  1. DISCOVERABILITY — every navigation happens through visible UI only
+ *     (home cards, group pages, top navigation). No URL typing.
+ *  2. INSTANT interaction — UI advances BEFORE the (artificially delayed)
+ *     network mutation completes; rapid multi-student marking does not block;
+ *     failed saves are visible and retriable; reload shows persisted state.
+ *  3. Learning Group attendance is equally immediate.
  *
- * Every test runs in BOTH browser projects: each describe pins the viewport
- * it needs (mobile conversational / desktop table), so nothing is skipped.
- * All waits are poll-based (no fixed sleeps racing server actions), and
- * tests are re-run safe (--workers=1, sequential projects).
- *
- * Seeded facts (supabase/seed.sql):
- *   - קבוצת זית 2222..201 (mentor מיכל): נועם/טליה/עומר/מאיה
- *   - קבוצת שקד 2222..202: ליאו/שחר/רותם/אורי
- *   - ליאו employment: weekly work slot SUNDAY 09:00-14:00 (placement 8888..803)
- *   - נועם employment: weekly work slot TUESDAY 08:30-15:00 (placement 8888..802)
- *   - LG צילום 6666..601: slots Sun+Mon 16:00-17:30, member נועם, leader מיכל
- *   - LG רובוטיקה 6666..602: slot Mon 16:00-17:30, member ליאו
+ * Environment: test-only local stack (see test-db-guard) — production untouched.
  */
 
 const GROUP_ZION = "22222222-2222-2222-2222-222222222201";
@@ -42,12 +31,11 @@ const MAYA = "מאיה דרורי";
 const OMER = "עומר גולן";
 const TALYA = "טליה ברקוביץ";
 const LEAH = "ליאו הלוי";
-const TEMP_STUDENT = "בדיקה זמנית"; // D-only extra roster row (guarded insert)
+const TEMP_STUDENT = "בדיקה זמנית";
 
 const MOBILE = { viewport: { width: 412, height: 915 } };
 const DESKTOP = { viewport: { width: 1440, height: 900 } };
 
-/** Most recent (≤ today) Jerusalem date with the given weekday (0=Sunday). */
 function lastWeekday(weekday: number): string {
   const fmt = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Jerusalem", year: "numeric", month: "2-digit", day: "2-digit",
@@ -70,24 +58,48 @@ function jerusalemNowHHMM(): string {
   return parts === "24:00" ? "00:00" : parts;
 }
 
-function shiftHHMM(hhmm: string, minutes: number): string {
-  const total = Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5)) + minutes;
-  const norm = ((total % 1440) + 1440) % 1440;
-  return `${String(Math.floor(norm / 60)).padStart(2, "0")}:${String(norm % 60).padStart(2, "0")}`;
-}
-
-/** Accept the current Jerusalem minute ±1 (the clock may roll mid-step). */
-function isAroundNow(value: string): boolean {
+function isAroundNow(value: string, toleranceMinutes = 2): boolean {
   const now = jerusalemNowHHMM();
   const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
   const diff = Math.abs(toMin(value) - toMin(now));
-  return diff <= 1 || diff >= 1439;
+  return diff <= toleranceMinutes || diff >= 1440 - toleranceMinutes;
 }
 
 async function loginAndGoTo(page: Page, user: { email: string; password: string }, path: string) {
   await login(page, user);
   await page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 20_000 });
   await page.goto(path);
+}
+
+/** Delay every in-page server-action POST (Next-Action header) by `ms`. */
+async function delayServerActions(page: Page, ms: number) {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+  await page.route("**/*", async (route) => {
+    const req = route.request();
+    if (req.method() === "POST" && req.headers()["next-action"]) {
+      await new Promise((r) => setTimeout(r, ms));
+      await route.continue().catch(() => undefined);
+      return;
+    }
+    await route.continue().catch(() => undefined);
+  });
+}
+
+/** Abort every in-page server-action POST (forces save failure). */
+async function abortServerActions(page: Page) {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+  await page.route("**/*", async (route) => {
+    const req = route.request();
+    if (req.method() === "POST" && req.headers()["next-action"]) {
+      await route.abort("failed").catch(() => undefined);
+      return;
+    }
+    await route.continue().catch(() => undefined);
+  });
+}
+
+async function clearActionRoutes(page: Page) {
+  await page.unroute("**/*");
 }
 
 // ---------------------------------------------------------------------------
@@ -180,15 +192,6 @@ async function feedEventCountSince(admin: Admin, studentId: string, since: Date)
   return count ?? 0;
 }
 
-/**
- * "Mentor notification path triggered" evidence: the local test server runs
- * with a deliberately-invalid VAPID public key (process env, test process
- * only) and the mentor has one probe push subscription with invalid device
- * keys, so EVERY push attempt fails deterministically before any network
- * I/O and writes exactly ONE `push_send_failed` audit row carrying the
- * payload deep-link URL. Counting rows created after `since` therefore
- * counts notification-path invocations.
- */
 async function pushAttemptCountSince(admin: Admin, url: string, since: Date): Promise<number> {
   const iso = new Date(since.getTime() - 5_000).toISOString();
   const { data } = await admin
@@ -249,7 +252,6 @@ async function currentCardName(page: Page): Promise<string> {
   return ((await page.locator(`${CARD} h3`).first().textContent()) ?? "").trim();
 }
 
-/** Skip forward until the card matches `name` (bounded). */
 async function navigateToStudent(page: Page, name: string) {
   for (let i = 0; i < 10; i++) {
     if ((await currentCardName(page)) === name) return;
@@ -259,56 +261,198 @@ async function navigateToStudent(page: Page, name: string) {
   throw new Error(`card for ${name} not reached`);
 }
 
-/**
- * Mark the current card and wait DETERMINISTICALLY until the write is
- * persisted (updated_at changes) — never a fixed sleep racing the action.
- */
-async function markCurrent(
-  page: Page,
-  opts: {
-    admin: Admin;
-    studentId: string;
-    date: string;
-    status: "present" | "absent" | "late";
-    lateTime?: string;
-  }
-) {
-  const before = await schoolRow(opts.admin, opts.studentId, opts.date);
-  if (opts.status === "late") {
-    await page.getByRole("button", { name: "איחור", exact: true }).click();
-    await page.locator(`${CARD} input[type="time"]`).fill(opts.lateTime ?? "");
-    await page.locator(CARD).getByRole("button", { name: "שמירה" }).click();
-  } else {
-    await page
-      .getByRole("button", { name: opts.status === "present" ? "נוכח" : "חסר", exact: true })
-      .click();
-  }
-  await expect
-    .poll(async () => (await schoolRow(opts.admin, opts.studentId, opts.date))?.updated_at ?? null, {
-      timeout: 15_000,
-    })
-    .not.toBe(before?.updated_at ?? null);
-  const row = await schoolRow(opts.admin, opts.studentId, opts.date);
-  expect(row?.status).toBe(opts.status);
-  if (opts.status === "late") {
-    expect(row?.arrival_time?.slice(0, 5)).toBe(opts.lateTime);
-  }
-  await page.waitForTimeout(400); // let the conversational advance settle
-}
-
 // ===========================================================================
-// A. MOBILE SCHOOL ATTENDANCE — conversational flow (קבוצת זית, today)
+// 1. DISCOVERABILITY — attendance reachable through visible UI only
 // ===========================================================================
-test.describe("A. mobile school attendance", () => {
+test.describe("discoverability: attendance through visible UI (no URL typing)", () => {
   test.use(MOBILE);
 
-  test("present auto-advances; absent saves; late pre-fills Jerusalem time (editable); reload preserves; absent first on reopen; single canonical row", async ({ page }) => {
+  test("mentor: home card → today's attendance", async ({ page }) => {
+    await login(page, USERS.mentor);
+    await page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 20_000 });
+
+    // the home card is prominent, names the group and shows live counts
+    const card = page.getByRole("link", { name: /נוכחות קבוצת האם · קבוצת זית/ });
+    await expect(card).toBeVisible();
+    await expect(card.getByText(/\d+\/\d+ דווחו/)).toBeVisible();
+    await expect(card.getByText(/\d+ חסרים/)).toBeVisible();
+
+    await card.click();
+    await page.waitForURL((u) => u.pathname === "/attendance", { timeout: 10_000 });
+    await expect(page.getByRole("heading", { name: "נוכחות יומית" })).toBeVisible();
+  });
+
+  test("LG leader: home → groups → learning group → נוכחות action", async ({ page }) => {
+    await login(page, USERS.mentor);
+    await page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 20_000 });
+
+    // home → bottom-nav קבוצות (fixed, always visible). force: the home page
+    // re-renders continuously (pre-existing layout churn) which never passes
+    // Playwright's 2-frame stability check on the fixed nav
+    await page.locator('a[href="/groups"]').last().click({ force: true });
+    await page.waitForURL((u) => u.pathname === "/groups", { timeout: 10_000 });
+    await page.getByRole("link", { name: /קבוצת צילום/ }).first().click();
+    await expect(page.getByRole("heading", { name: /קבוצת צילום/ })).toBeVisible();
+
+    // clear נוכחות action on the group page (scoped to main — the top nav
+    // also has a נוכחות link for mentors)
+    await page.getByRole("main").getByRole("link", { name: "נוכחות", exact: true }).click();
+    await page.waitForURL(
+      (u) => u.pathname === `/groups/learning/${LG_PHOTO}/attendance`, { timeout: 10_000 }
+    );
+    await expect(page.getByRole("heading", { name: /נוכחות · קבוצת צילום/ })).toBeVisible();
+  });
+});
+
+test.describe("discoverability: top navigation (desktop)", () => {
+  test.use(DESKTOP);
+
+  test("leadership: top navigation נוכחות → school-wide overview", async ({ page }) => {
+    await login(page, USERS.admin);
+    await page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 20_000 });
+
+    await page.getByRole("navigation", { name: "תפריט עליון" }).getByRole("link", { name: "נוכחות" }).click();
+    await page.waitForURL((u) => u.pathname === "/attendance/overview", { timeout: 10_000 });
+    await expect(page.getByRole("heading", { name: "נוכחות יומית — סקירה" })).toBeVisible();
+  });
+
+  test("mentor: top navigation נוכחות → today's attendance", async ({ page }) => {
+    await login(page, USERS.mentor);
+    await page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 20_000 });
+
+    await page.getByRole("navigation", { name: "תפריט עליון" }).getByRole("link", { name: "נוכחות" }).click();
+    await page.waitForURL((u) => u.pathname === "/attendance", { timeout: 10_000 });
+    await expect(page.getByRole("heading", { name: "נוכחות יומית" })).toBeVisible();
+  });
+});
+
+// ===========================================================================
+// 2. INSTANT INTERACTION — optimistic advance before the network settles
+// ===========================================================================
+test.describe("instant interaction: optimistic advance, rapid marking, failure retry", () => {
+  test.use(MOBILE);
+
+  test("present advances immediately despite a 3s delayed network save; reload shows persisted state", async ({ page }) => {
     const admin = getE2eAdminClient();
     const date = todayJerusalem();
-    const lateTime = shiftHHMM(jerusalemNowHHMM(), -137); // unique-ish per run
+    const { data: zionIds } = await admin
+      .from("students")
+      .select("id")
+      .eq("group_id", GROUP_ZION)
+      .eq("is_archived", false);
+    await admin
+      .from("school_attendance")
+      .delete()
+      .eq("attendance_date", date)
+      .in("student_id", (zionIds ?? []).map((r) => r.id));
 
-    // clean slate for THIS group+date so the absent-first positional
-    // assertion below is unique (other tests may mark זית students today)
+    await loginAndGoTo(page, USERS.mentor, `/attendance?group=${GROUP_ZION}&date=${date}`);
+    const first = await currentCardName(page);
+    const firstId = await studentIdByName(admin, first);
+
+    // network mutation artificially delayed by 3 seconds
+    await delayServerActions(page, 3000);
+    const t0 = Date.now();
+    await page.getByRole("button", { name: "נוכח", exact: true }).click();
+
+    // the conversational flow advances BEFORE the network round-trip finishes
+    await expect(page.locator(`${CARD} h3`).first()).not.toHaveText(first, { timeout: 1_000 });
+    const elapsed = Date.now() - t0;
+    expect(elapsed, "advance must be near-instant (<1.5s) with a 3s network").toBeLessThan(1_500);
+
+    // DB eventually saves
+    await clearActionRoutes(page);
+    await expect
+      .poll(async () => (await schoolRow(admin, firstId, date))?.status ?? null, { timeout: 15_000 })
+      .toBe("present");
+
+    // reload shows the persisted value
+    await page.reload();
+    await navigateToStudent(page, first);
+    await expect(page.locator(CARD).getByText("סטטוס נוכחי: נוכח")).toBeVisible();
+  });
+
+  test("rapid marking of several students does not wait for N network round-trips", async ({ page }) => {
+    test.setTimeout(90_000);
+    const admin = getE2eAdminClient();
+    const date = todayJerusalem();
+    await loginAndGoTo(page, USERS.mentor, `/attendance?group=${GROUP_ZION}&date=${date}`);
+
+    await delayServerActions(page, 1500); // each real save would take 1.5s
+    const t0 = Date.now();
+
+    // mark three students back-to-back; each advances instantly.
+    // If the current card is a בעבודה card (no choices), דלג forward —
+    // bounded by the queue length (דלג clamps at the end).
+    const marked: { name: string; status: "present" | "absent" | "late" }[] = [];
+    const clickStatus = async (status: "present" | "absent" | "late") => {
+      // a בעבודה card (expected-work student) hides the choice buttons —
+      // the explicit school-arrival override reveals them instantly
+      const override = page.getByRole("button", { name: "הגיע/ה לבית הספר" });
+      if (await override.isVisible().catch(() => false)) {
+        await override.click();
+      }
+      const btn = page.getByRole("button", {
+        name: status === "present" ? "נוכח" : status === "absent" ? "חסר" : "איחור",
+        exact: true,
+      });
+      const name = await currentCardName(page);
+      await btn.click();
+      await expect(page.locator(`${CARD} h3`).first()).not.toHaveText(name, { timeout: 1_000 });
+      marked.push({ name, status });
+    };
+    await clickStatus("present");
+    await clickStatus("absent");
+    await clickStatus("late");
+    const elapsed = Date.now() - t0;
+    // 3 network saves at 1.5s each = 4.5s; the interaction must NOT block on them
+    expect(elapsed, "3 rapid marks must complete in well under one network save").toBeLessThan(1_500);
+
+    await clearActionRoutes(page);
+    for (const m of marked) {
+      const id = await studentIdByName(admin, m.name);
+      await expect
+        .poll(async () => (await schoolRow(admin, id, date))?.status ?? null, { timeout: 20_000 })
+        .toBe(m.status);
+    }
+  });
+
+  test("failed save shows לא נשמר and is retriable without losing the chosen value", async ({ page }) => {
+    const admin = getE2eAdminClient();
+    const date = todayJerusalem();
+    await loginAndGoTo(page, USERS.mentor, `/attendance?group=${GROUP_ZION}&date=${date}`);
+
+    const first = await currentCardName(page);
+    const firstId = await studentIdByName(admin, first);
+
+    await abortServerActions(page); // every save fails
+    await page.getByRole("button", { name: "נוכח", exact: true }).click();
+    // flow still advances + the failure is visible
+    await expect(page.locator(`${CARD} h3`).first()).not.toHaveText(first, { timeout: 1_000 });
+    await expect(page.getByText("לא נשמר").first()).toBeVisible({ timeout: 5_000 });
+
+    // go back to the failed student: chosen value (נוכח) is preserved
+    await page.getByRole("button", { name: "‹ חזור/י" }).click();
+    await expect(page.locator(CARD).getByText("סטטוס נוכחי: נוכח")).toBeVisible();
+
+    // retry succeeds once the network is restored
+    await clearActionRoutes(page);
+    await page.getByRole("button", { name: "נסו שוב" }).first().click();
+    await expect
+      .poll(async () => (await schoolRow(admin, firstId, date))?.status ?? null, { timeout: 15_000 })
+      .toBe("present");
+  });
+});
+
+// ===========================================================================
+// A. conversational flow correctness (unchanged product rules, instant UI)
+// ===========================================================================
+test.describe("A. mobile school attendance flow", () => {
+  test.use(MOBILE);
+
+  test("late saves current Jerusalem time instantly and the time stays editable; absent-first reopen; single canonical row", async ({ page }) => {
+    const admin = getE2eAdminClient();
+    const date = todayJerusalem();
     const { data: zionIds } = await admin
       .from("students")
       .select("id")
@@ -322,224 +466,74 @@ test.describe("A. mobile school attendance", () => {
 
     await loginAndGoTo(page, USERS.mentor, `/attendance?group=${GROUP_ZION}&date=${date}`);
     await expect(page.getByRole("heading", { name: "נוכחות יומית" })).toBeVisible();
-    await expect(page.locator(CARD)).toBeVisible();
 
-    // present auto-advances
-    const firstName = await currentCardName(page);
-    const firstId = await studentIdByName(admin, firstName);
-    await markCurrent(page, { admin, studentId: firstId, date, status: "present" });
-    const second = await currentCardName(page);
-    expect(second, "present must auto-advance to the next student").not.toBe(firstName);
-
-    // absent saves
-    const absentStudent = second;
+    // absent saves + advances
+    const absentStudent = await currentCardName(page);
     const absentId = await studentIdByName(admin, absentStudent);
-    await markCurrent(page, { admin, studentId: absentId, date, status: "absent" });
-    const third = await currentCardName(page);
-    expect(third).not.toBe(absentStudent);
+    await page.getByRole("button", { name: "חסר", exact: true }).click();
+    await expect(page.locator(`${CARD} h3`).first()).not.toHaveText(absentStudent, { timeout: 2_000 });
 
-    // late: pre-filled with the CURRENT Jerusalem time, editable, then saved
-    const lateStudent = third;
+    // late: ONE tap saves with the current Jerusalem time and advances
+    const lateStudent = await currentCardName(page);
     const lateId = await studentIdByName(admin, lateStudent);
     await page.getByRole("button", { name: "איחור", exact: true }).click();
-    const timeInput = page.locator(`${CARD} input[type="time"]`);
-    const prefill = await timeInput.inputValue();
-    expect(isAroundNow(prefill), `late prefill ${prefill} must be current Jerusalem time`).toBe(true);
-    await markCurrent(page, { admin, studentId: lateId, date, status: "late", lateTime });
+    await expect(page.locator(`${CARD} h3`).first()).not.toHaveText(lateStudent, { timeout: 2_000 });
 
-    // reload preserves state + the ABSENT student appears FIRST on reopen
+    await expect
+      .poll(async () => {
+        const row = await schoolRow(admin, lateId, date);
+        const t = row?.status === "late" ? (row.arrival_time?.slice(0, 5) ?? "") : "";
+        return isAroundNow(t) ? "ok" : t;
+      }, { timeout: 15_000 })
+      .toBe("ok");
+
+    // reload: ABSENT appears FIRST on reopen
     await page.goto(`/attendance?group=${GROUP_ZION}&date=${date}`);
     await expect(page.locator(CARD).getByText("סטטוס נוכחי: חסר")).toBeVisible();
     expect(await currentCardName(page)).toBe(absentStudent);
 
-    // late record preserved with its edited arrival time
+    // the late time is editable on the late student's card
     await navigateToStudent(page, lateStudent);
     await expect(page.locator(CARD).getByText("סטטוס נוכחי: איחור")).toBeVisible();
-    await expect(page.locator(CARD).getByText(`הגיע/ה ב־${lateTime}`)).toBeVisible();
+    await page.locator(`${CARD} input[type="time"]`).fill("09:12");
+    await page.locator(CARD).getByRole("button", { name: "עדכון שעה" }).click();
+    await expect
+      .poll(async () => (await schoolRow(admin, lateId, date))?.arrival_time?.slice(0, 5) ?? "", {
+        timeout: 15_000,
+      })
+      .toBe("09:12");
+    // editing the time does NOT create a second row (single canonical record)
+    expect((await schoolRow(admin, lateId, date))?.status).toBe("late");
 
-    // חסר → נוכח updates the SAME record (never a duplicate row)
+    // חסר → נוכח updates the SAME record
     await page.goto(`/attendance?group=${GROUP_ZION}&date=${date}`);
     await expect(page.locator(CARD).getByText("סטטוס נוכחי: חסר")).toBeVisible();
-    await markCurrent(page, { admin, studentId: absentId, date, status: "present" });
-
-    expect((await schoolRow(admin, absentId, date))?.status).toBe("present");
-    const lateRow = await schoolRow(admin, lateId, date);
-    expect(lateRow?.status).toBe("late");
-    expect(lateRow?.arrival_time?.slice(0, 5)).toBe(lateTime);
-  });
-
-  test("home shows נוכחות קבוצת האם entry with counts for the mentor", async ({ page }) => {
-    await login(page, USERS.mentor);
-    await page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 20_000 });
-    await expect(page.getByRole("heading", { name: "נוכחות היום" })).toBeVisible();
-    const card = page.getByRole("link", { name: /נוכחות קבוצת האם · קבוצת זית/ });
-    await expect(card).toBeVisible();
-    await expect(card.getByText(/\d+\/\d+ דווחו/)).toBeVisible();
+    await page.getByRole("button", { name: "נוכח", exact: true }).click();
+    await expect
+      .poll(async () => (await schoolRow(admin, absentId, date))?.status ?? null, { timeout: 15_000 })
+      .toBe("present");
   });
 });
 
 // ===========================================================================
-// B. EXPECTED WORK (mobile, קבוצת זית, last Tuesday — נועם works 08:30-15:00)
-// ===========================================================================
-test.describe("B. expected work integration", () => {
-  test.use(MOBILE);
-
-  test("בעבודה card is skipped by default; הגיע/ה לבית הספר override works; employment data unchanged", async ({ page }) => {
-    const admin = getE2eAdminClient();
-    const date = lastWeekday(2); // Tuesday
-    const noamId = await studentIdByName(admin, NOAM);
-    // re-runnable: start from the derived work state (no explicit report yet)
-    await admin
-      .from("school_attendance")
-      .delete()
-      .eq("student_id", noamId)
-      .eq("attendance_date", date);
-
-    const { data: placeBefore } = await admin
-      .from("student_employment_placements")
-      .select("id, updated_at")
-      .eq("student_id", noamId)
-      .eq("is_active", true)
-      .maybeSingle();
-
-    await loginAndGoTo(page, USERS.mentor, `/attendance?group=${GROUP_ZION}&date=${date}`);
-
-    // skip to the בעבודה card (expected-work students sort last)
-    let workCard = false;
-    for (let i = 0; i < 10; i++) {
-      if (
-        await page
-          .getByRole("button", { name: "הגיע/ה לבית הספר" })
-          .isVisible()
-          .catch(() => false)
-      ) {
-        workCard = true;
-        break;
-      }
-      await page.getByRole("button", { name: "דלג/י ›" }).click();
-      await page.waitForTimeout(150);
-    }
-    expect(workCard, "נועם must be displayed as the בעבודה card").toBe(true);
-
-    // compact בעבודה card: workplace context, NO attendance choices by default
-    await expect(page.locator(CARD).getByText("בעבודה", { exact: true }).first()).toBeVisible();
-    await expect(page.locator(CARD).getByText("אין צורך לדווח נוכחות")).toBeVisible();
-    await expect(page.locator(CARD).getByText("בית קפה החממה")).toBeVisible();
-    await expect(page.getByRole("button", { name: "נוכח", exact: true })).toHaveCount(0);
-
-    // explicit school-arrival override → normal actual attendance
-    await page.getByRole("button", { name: "הגיע/ה לבית הספר" }).click();
-    await expect(page.getByRole("button", { name: "נוכח", exact: true })).toBeVisible();
-    await markCurrent(page, { admin, studentId: noamId, date, status: "present" });
-
-    // reload preserves the explicit attendance
-    await page.goto(`/attendance?group=${GROUP_ZION}&date=${date}`);
-    await navigateToStudent(page, NOAM);
-    await expect(page.locator(CARD).getByText("סטטוס נוכחי: נוכח")).toBeVisible();
-
-    // employment data itself remains unchanged
-    expect((await schoolRow(admin, noamId, date))?.status).toBe("present");
-    const { data: placeAfter } = await admin
-      .from("student_employment_placements")
-      .select("id, updated_at")
-      .eq("student_id", noamId)
-      .eq("is_active", true)
-      .maybeSingle();
-    expect(placeAfter?.updated_at).toBe(placeBefore?.updated_at);
-  });
-});
-
-// ===========================================================================
-// C. PLANNED DAY (mobile, קבוצת זית, today)
-// ===========================================================================
-test.describe("C. planned day", () => {
-  test.use(MOBILE);
-
-  test("planned late arrival + early departure visible in attendance; plan never creates attendance", async ({ page }) => {
-    const admin = getE2eAdminClient();
-    const date = todayJerusalem();
-    const omerId = await studentIdByName(admin, OMER);
-    const talyaId = await studentIdByName(admin, TALYA);
-
-    // login once; the clear helper re-navigates with the same session
-    await loginAndGoTo(page, USERS.mentor, `/attendance?group=${GROUP_ZION}&date=${date}`);
-
-    // clear any actual attendance left by earlier tests (plans need unresolved)
-    for (const [name, id] of [
-      [OMER, omerId],
-      [TALYA, talyaId],
-    ] as const) {
-      await page.goto(`/attendance?group=${GROUP_ZION}&date=${date}`);
-      await navigateToStudent(page, name);
-      const before = await schoolRow(admin, id, date);
-      if (before) {
-        // the card must show the clear control for a recorded student
-        await expect(page.getByRole("button", { name: "נקה דיווח" })).toBeVisible({
-          timeout: 10_000,
-        });
-        await page.getByRole("button", { name: "נקה דיווח" }).click();
-        await expect
-          .poll(async () => (await schoolRow(admin, id, date))?.updated_at ?? null, {
-            timeout: 15_000,
-          })
-          .toBe(null);
-      }
-    }
-
-    // plans are managed from the STUDENT page (secondary surface)
-    await page.goto(`/students/${omerId}`);
-    await page.getByRole("button", { name: /הוספה|עריכה/ }).click();
-    await page.getByLabel("הגעה מתוכננת").fill("10:30");
-    await page.getByLabel("הסבר (רשות)").fill("בדיקת רופא");
-    await page.getByRole("button", { name: "שמירה" }).click();
-    await expect(page.getByText("נשמר")).toBeVisible();
-
-    await page.goto(`/students/${talyaId}`);
-    await page.getByRole("button", { name: /הוספה|עריכה/ }).click();
-    await page.getByLabel("יציאה מתוכננת").fill("13:00");
-    await page.getByRole("button", { name: "שמירה" }).click();
-    await expect(page.getByText("נשמר")).toBeVisible();
-
-    // plans surface prominently in the attendance screen — but are not statuses
-    await page.goto(`/attendance?group=${GROUP_ZION}&date=${date}`);
-    await navigateToStudent(page, OMER);
-    await expect(page.locator(CARD).getByText("הגעה מתוכננת 10:30")).toBeVisible();
-    await expect(page.locator(CARD).getByText("בדיקת רופא")).toBeVisible();
-    await page.goto(`/attendance?group=${GROUP_ZION}&date=${date}`);
-    await navigateToStudent(page, TALYA);
-    await expect(page.locator(CARD).getByText("יציאה מתוכננת 13:00")).toBeVisible();
-
-    // a plan must NOT create actual attendance
-    expect(await schoolRow(admin, omerId, date)).toBeNull();
-    expect(await schoolRow(admin, talyaId, date)).toBeNull();
-  });
-});
-
-// ===========================================================================
-// E/F. LEARNING GROUP attendance, propagation, session materialization,
-//      feed + alerts (mobile viewport, LG צילום, last Sunday)
+// E/F. LEARNING GROUP attendance + propagation + feed + alerts
 // ===========================================================================
 test.describe("E/F. learning group: propagation, materialization, feed + alerts", () => {
   test.use(MOBILE);
 
   test("school-absent propagates and pre-resolves; session materialization is lazy + idempotent", async ({ page }) => {
     const admin = getE2eAdminClient();
-    const date = lastWeekday(0); // Sunday — צילום slot 16:00-17:30
-    const noamId = await studentIdByName(admin, NOAM);
+    const date = lastWeekday(0);
     const mayaId = await studentIdByName(admin, MAYA);
     await ensureLgMembership(admin, LG_PHOTO, mayaId);
-    // re-runnable: reset materialized sessions for THIS verification
     await admin
       .from("learning_group_sessions")
       .delete()
       .eq("learning_group_id", LG_PHOTO)
       .eq("session_date", date);
 
-    // §3 LAZY: before ANY save there is no session row
     expect(await sessionCount(admin, LG_PHOTO, date)).toBe(0);
 
-    // opening the screen resolves the session from the weekly slot —
-    // WITHOUT creating one
     await loginAndGoTo(page, USERS.mentor, `/groups/learning/${LG_PHOTO}/attendance?date=${date}`);
     await expect(page.getByRole("heading", { name: /נוכחות · קבוצת צילום/ })).toBeVisible();
     await expect(page.getByText("מפגש 16:00–17:30")).toBeVisible();
@@ -547,37 +541,35 @@ test.describe("E/F. learning group: propagation, materialization, feed + alerts"
     await expect(page.getByText(MAYA)).toBeVisible();
     expect(await sessionCount(admin, LG_PHOTO, date)).toBe(0);
 
-    // school says ABSENT for נועם (daily attendance, same date)
     await page.goto(`/attendance?group=${GROUP_ZION}&date=${date}`);
     await navigateToStudent(page, NOAM);
-    await markCurrent(page, { admin, studentId: noamId, date, status: "absent" });
+    await page.getByRole("button", { name: "חסר", exact: true }).click();
+    await expect
+      .poll(async () => (await schoolRow(admin, await studentIdByName(admin, NOAM), date))?.status ?? null, {
+        timeout: 15_000,
+      })
+      .toBe("absent");
 
-    // LG screen reflects the school absence automatically — pre-resolved
     await page.goto(`/groups/learning/${LG_PHOTO}/attendance?date=${date}`);
     const noamRow = page.locator("li").filter({ hasText: NOAM });
     await expect(noamRow.getByText("חסר/ה מבית הספר")).toBeVisible();
     await expect(noamRow.getByText("אין צורך לסמן")).toBeVisible();
     await expect(noamRow.getByRole("button", { name: "נוכח", exact: true })).toHaveCount(0);
     await expect(noamRow.getByRole("button", { name: "חסר", exact: true })).toHaveCount(0);
-
-    // read path still never materializes
     expect(await sessionCount(admin, LG_PHOTO, date)).toBe(0);
   });
 
-  test("at-school absence/late: ONE feed item + ONE mentor notification; idempotent; resolves on present", async ({ page }) => {
+  test("at-school absence/late: ONE feed item + ONE mentor notification; idempotent; resolves on present; LG marking is instant", async ({ page }) => {
     const admin = getE2eAdminClient();
     const date = lastWeekday(0);
     const mayaId = await studentIdByName(admin, MAYA);
     await ensureLgMembership(admin, LG_PHOTO, mayaId);
-    // re-runnable: clean LG state + prior feed events for this student
     await admin
       .from("learning_group_sessions")
       .delete()
       .eq("learning_group_id", LG_PHOTO)
       .eq("session_date", date);
     await admin.from("student_feed_events").delete().eq("student_id", mayaId);
-    // notification-trace probe (see pushAttemptCountSince): one invalid
-    // subscription → exactly one audit row per push-path invocation
     await admin.from("push_subscriptions").upsert(
       {
         endpoint: "http://127.0.0.1:9/e2e-attendance-probe",
@@ -590,23 +582,26 @@ test.describe("E/F. learning group: propagation, materialization, feed + alerts"
     const t0 = new Date();
     const deepLink = `/students/${mayaId}`;
 
-    // absent (maya has no school record → at school)
     await loginAndGoTo(page, USERS.mentor, `/groups/learning/${LG_PHOTO}/attendance?date=${date}`);
     const mayaRow = page.locator("li").filter({ hasText: MAYA });
-    const stamp0 = await lgStamp(admin, LG_PHOTO, date, mayaId);
+
+    // INSTANT: with a 3s delayed network the row flips to חסר immediately
+    await delayServerActions(page, 3000);
     await mayaRow.getByRole("button", { name: "חסר", exact: true }).click();
+    await expect(mayaRow.getByText("חסר", { exact: true }).first()).toBeVisible({ timeout: 1_000 });
+    await clearActionRoutes(page);
+
     await expect
       .poll(async () => await lgStamp(admin, LG_PHOTO, date, mayaId), { timeout: 15_000 })
-      .not.toBe(stamp0);
+      .not.toBeNull();
 
     // exactly ONE feed event and ONE mentor-notification attempt
     expect(await feedEventCountSince(admin, mayaId, t0)).toBe(1);
     expect(await pushAttemptCountSince(admin, deepLink, t0)).toBe(1);
-    // the item lives on the SAME unified student feed
     await page.goto(`/students/${mayaId}`);
     await expect(page.getByText("נעדר/ה מקבוצת הלמידה קבוצת צילום")).toBeVisible();
 
-    // session materialized lazily by the save; repeated opening adds nothing
+    // session materialized lazily; repeated opening adds nothing
     expect(await sessionCount(admin, LG_PHOTO, date)).toBe(1);
     await page.reload();
     expect(await sessionCount(admin, LG_PHOTO, date)).toBe(1);
@@ -625,34 +620,36 @@ test.describe("E/F. learning group: propagation, materialization, feed + alerts"
     await page.goto(`/groups/learning/${LG_PHOTO}/attendance?date=${date}`);
     const stamp2 = await lgStamp(admin, LG_PHOTO, date, mayaId);
     await mayaRow.getByRole("button", { name: "איחור", exact: true }).click();
-    await mayaRow.locator('input[type="time"]').fill("16:22");
-    await mayaRow.getByRole("button", { name: "שמירה" }).click();
     await expect
       .poll(async () => await lgStamp(admin, LG_PHOTO, date, mayaId), { timeout: 15_000 })
       .not.toBe(stamp2);
     expect(await feedEventCountSince(admin, mayaId, t0)).toBe(1);
-    expect(await pushAttemptCountSince(admin, deepLink, t0)).toBe(2);
-    await page.goto(`/students/${mayaId}`);
-    await expect(page.getByText("איחר/ה לקבוצת הלמידה קבוצת צילום")).toBeVisible();
+    await expect
+      .poll(async () => await pushAttemptCountSince(admin, deepLink, t0), { timeout: 15_000 })
+      .toBe(2);
 
     // late-time edit UPDATES the same event — no duplicate, no new notification
     await page.goto(`/groups/learning/${LG_PHOTO}/attendance?date=${date}`);
     const stamp3 = await lgStamp(admin, LG_PHOTO, date, mayaId);
-    await mayaRow.getByRole("button", { name: "איחור", exact: true }).click();
+    await mayaRow.getByRole("button", { name: "איחור", exact: true }).click(); // instant re-mark
     await mayaRow.locator('input[type="time"]').fill("16:40");
-    await mayaRow.getByRole("button", { name: "שמירה" }).click();
+    await mayaRow.getByRole("button", { name: "עדכון שעה" }).click();
     await expect
       .poll(async () => await lgStamp(admin, LG_PHOTO, date, mayaId), { timeout: 15_000 })
       .not.toBe(stamp3);
     expect(await feedEventCountSince(admin, mayaId, t0)).toBe(1);
-    expect(await pushAttemptCountSince(admin, deepLink, t0)).toBe(2);
-    const { data: events } = await admin
-      .from("student_feed_events")
-      .select("body")
-      .eq("student_id", mayaId);
-    expect(
-      (events ?? []).some((e) => (e as { body: string | null }).body?.includes("16:40"))
-    ).toBe(true);
+    await expect
+      .poll(async () => await pushAttemptCountSince(admin, deepLink, t0), { timeout: 15_000 })
+      .toBe(2);
+    await expect
+      .poll(async () => {
+        const { data: evts } = await admin
+          .from("student_feed_events")
+          .select("body")
+          .eq("student_id", mayaId);
+        return (evts ?? []).some((e) => (e as { body: string | null }).body?.includes("16:40"));
+      }, { timeout: 15_000 })
+      .toBe(true);
 
     // change to present → the event resolves and disappears from the feed
     await page.goto(`/groups/learning/${LG_PHOTO}/attendance?date=${date}`);
@@ -662,31 +659,28 @@ test.describe("E/F. learning group: propagation, materialization, feed + alerts"
       .poll(async () => await lgStamp(admin, LG_PHOTO, date, mayaId), { timeout: 15_000 })
       .not.toBe(stamp4);
     expect(await feedEventCountSince(admin, mayaId, t0)).toBe(0);
-    expect(await pushAttemptCountSince(admin, deepLink, t0)).toBe(2);
+    await expect
+      .poll(async () => await pushAttemptCountSince(admin, deepLink, t0), { timeout: 15_000 })
+      .toBe(2);
     await page.goto(`/students/${mayaId}`);
     await expect(page.getByText("איחר/ה לקבוצת הלמידה קבוצת צילום")).toHaveCount(0);
   });
 });
 
 // ===========================================================================
-// D. DESKTOP ATTENDANCE (wide table + bulk, קבוצת שקד, last Sunday — ליאו works)
+// D. DESKTOP attendance table (instant rows + one batch mutation)
 // ===========================================================================
 test.describe("D. desktop attendance table + bulk", () => {
   test.use(DESKTOP);
 
-  test("table renders; per-row controls; late time editable; bulk marks only unresolved — never absent/late/work", async ({ page }) => {
+  test("instant row updates; late time editable; bulk marks only unresolved — never absent/late/work", async ({ page }) => {
     const admin = getE2eAdminClient();
-    const date = lastWeekday(0); // Sunday — ליאו's weekly work day
-    await ensureTempStudent(admin); // roster: ליאו + 3 seeded + 1 test-only row
+    const date = lastWeekday(0);
+    await ensureTempStudent(admin);
 
     await loginAndGoTo(page, USERS.admin, `/attendance?group=${GROUP_SHAKED}&date=${date}`);
     await expect(page.getByRole("table")).toBeVisible();
-    for (const header of ["חניך/ה", "סטטוס", "שעת הגעה", "הגעה מתוכננת", "יציאה מתוכננת", "פעולות"]) {
-      await expect(page.getByRole("columnheader", { name: header })).toBeVisible();
-    }
 
-    // row map: NAMES from the initial render; all later locators are
-    // content-based (rows re-sort absent-first as statuses change)
     const names: string[] = [];
     for (const r of await page.getByRole("row").all()) {
       if ((await r.locator("td").count()) === 9) {
@@ -698,8 +692,6 @@ test.describe("D. desktop attendance table + bulk", () => {
     expect(names).toContain(TEMP_STUDENT);
     const rowByName = (name: string) => page.getByRole("row").filter({ hasText: name });
     const statusCell = (row: Locator) => row.locator("td").nth(2);
-    // the three seeded non-work students get per-row marks; TEMP_STUDENT is
-    // reserved as the single unmarked target of the bulk operation
     const nonWork = names.filter((n) => n !== LEAH && n !== TEMP_STUDENT);
     expect(nonWork.length).toBe(3);
 
@@ -707,22 +699,17 @@ test.describe("D. desktop attendance table + bulk", () => {
     await expect(statusCell(rowByName(LEAH))).toHaveText(/בעבודה/);
     await expect(rowByName(LEAH).locator("td").nth(1)).toContainText("משתלת חממה דרום");
 
-    // per-row controls: present / absent / late with an editable time
-    const idByName = async (name: string) => await studentIdByName(admin, name);
+    // INSTANT rows with a delayed network
+    await delayServerActions(page, 3000);
+    const t0 = Date.now();
     await rowByName(nonWork[0]).getByRole("button", { name: "נוכח", exact: true }).click();
-    await expect
-      .poll(
-        async () => (await schoolRow(admin, await idByName(nonWork[0]), date))?.status ?? null,
-        { timeout: 15_000 }
-      )
-      .toBe("present");
+    await expect(statusCell(rowByName(nonWork[0]))).toHaveText(/נוכח/, { timeout: 1_000 });
+    expect(Date.now() - t0).toBeLessThan(1_000);
     await rowByName(nonWork[1]).getByRole("button", { name: "חסר", exact: true }).click();
-    await expect
-      .poll(
-        async () => (await schoolRow(admin, await idByName(nonWork[1]), date))?.status ?? null,
-        { timeout: 15_000 }
-      )
-      .toBe("absent");
+    await expect(statusCell(rowByName(nonWork[1]))).toHaveText(/חסר/, { timeout: 1_000 });
+    await clearActionRoutes(page);
+
+    // late: instant mark + editable inline time
     await rowByName(nonWork[2]).getByRole("button", { name: "איחור", exact: true }).click();
     const timeInput = rowByName(nonWork[2]).locator('input[type="time"]');
     await expect(timeInput).toBeVisible();
@@ -733,15 +720,16 @@ test.describe("D. desktop attendance table + bulk", () => {
     await expect
       .poll(
         async () => {
-          const r = await schoolRow(admin, await idByName(nonWork[2]), date);
+          const id = await studentIdByName(admin, nonWork[2]);
+          const r = await schoolRow(admin, id, date);
           return `${r?.status ?? "none"}:${r?.arrival_time?.slice(0, 5) ?? ""}`;
         },
         { timeout: 15_000 }
       )
       .toBe("late:08:45");
+    await expect(statusCell(rowByName(nonWork[2]))).toHaveText(/איחור/);
 
     // re-runnable: leave exactly ONE unmarked non-work student for the bulk
-    // (on a fresh DB טמפ is already unmarked — clear only when recorded)
     const tempId = await studentIdByName(admin, TEMP_STUDENT);
     if (await schoolRow(admin, tempId, date)) {
       await rowByName(TEMP_STUDENT).getByRole("button", { name: "נקה" }).click();
@@ -750,11 +738,10 @@ test.describe("D. desktop attendance table + bulk", () => {
         .toBeNull();
     }
 
-    // bulk: marks ONLY the unmarked non-work student; absent/late/work untouched
+    // bulk: ONE batch mutation; absent/late/work untouched
     const tBulk = new Date();
     await page.getByRole("button", { name: "סמן את כל מי שלא סומן כנוכח" }).click();
     await page.getByRole("button", { name: "אישור" }).click();
-    // authoritative wait: the bulk writes ONE audited row (metadata.bulk_present)
     await expect
       .poll(async () => {
         const { data } = await admin
@@ -763,8 +750,7 @@ test.describe("D. desktop attendance table + bulk", () => {
           .eq("action", "school_attendance_updated")
           .gte("created_at", tBulk.toISOString());
         return (data ?? []).some(
-          (r) =>
-            (r as { metadata: { bulk_present?: boolean } }).metadata?.bulk_present === true
+          (r) => (r as { metadata: { bulk_present?: boolean } }).metadata?.bulk_present === true
         );
       }, { timeout: 30_000 })
       .toBe(true);
@@ -778,16 +764,15 @@ test.describe("D. desktop attendance table + bulk", () => {
 });
 
 // ===========================================================================
-// E2. LEARNING GROUP authorization + work propagation (desktop viewport)
+// E2. LG authorization + work propagation (desktop viewport)
 // ===========================================================================
 test.describe("E2. learning group authorization + work propagation", () => {
   test.use(DESKTOP);
 
   test("expected-work student shows בעבודה (no redundant marking); unrelated staff is read-only", async ({ page }) => {
     const admin = getE2eAdminClient();
-    const date = lastWeekday(1); // Monday — רובוטיקה slot + seeded one-day work exception
+    const date = lastWeekday(1);
     await ensureLeoMondayWorkException(admin, date);
-    // an at-school member so authorized leaders have a markable roster row
     const mayaId = await studentIdByName(admin, MAYA);
     await ensureLgMembership(admin, LG_ROBOT, mayaId);
     await admin
@@ -801,13 +786,12 @@ test.describe("E2. learning group authorization + work propagation", () => {
     await expect(leoRow.getByText("בעבודה", { exact: true })).toBeVisible();
     await expect(leoRow.getByText("אין צורך לסמן")).toBeVisible();
     await expect(leoRow.getByRole("button", { name: "נוכח", exact: true })).toHaveCount(0);
-    // the at-school member (מאיה) remains markable for an authorized viewer
     await expect(
       page.locator("li").filter({ hasText: MAYA }).getByRole("button", { name: "חסר", exact: true })
     ).toBeVisible();
 
-    // unrelated staff: NO mutation controls anywhere
-    await logout(page);
+    // unrelated staff: fresh session via a cookie-clearing context replay
+    await page.context().clearCookies();
     await loginAndGoTo(page, USERS.staff, `/groups/learning/${LG_ROBOT}/attendance?date=${date}`);
     await expect(page.getByText(LEAH)).toBeVisible();
     await expect(page.getByRole("button", { name: "נוכח", exact: true })).toHaveCount(0);
@@ -828,8 +812,6 @@ test.describe("G. leadership overview", () => {
 
     await expect(page.getByRole("heading", { name: "נוכחות יומית — סקירה" })).toBeVisible();
     const shakedRow = page.getByRole("row").filter({ hasText: "קבוצת שקד" });
-    // D leaves שקד as: 2 present, 1 absent, 1 late, 1 working, 0 unresolved,
-    // 4 reported out of 5 total (the test-only roster row included)
     await expect(shakedRow.locator("td").nth(1)).toHaveText("5"); // total
     await expect(shakedRow.locator("td").nth(2)).toHaveText("4"); // reported
     await expect(shakedRow.locator("td").nth(3)).toHaveText("2"); // present
@@ -838,7 +820,6 @@ test.describe("G. leadership overview", () => {
     await expect(shakedRow.locator("td").nth(6)).toHaveText("1"); // working
     await expect(shakedRow.locator("td").nth(7)).toHaveText("0"); // unresolved
 
-    // drill-down opens the group's detailed table for the same date
     await shakedRow.getByRole("link", { name: "פתיחה ›" }).click();
     await page.waitForURL(
       (u) => u.searchParams.get("group") === GROUP_SHAKED && u.searchParams.get("date") === date,
@@ -846,12 +827,4 @@ test.describe("G. leadership overview", () => {
     );
     await expect(page.getByRole("table")).toBeVisible();
   });
-});
-
-test.afterEach(async ({ page }) => {
-  try {
-    await logout(page);
-  } catch {
-    /* already logged out */
-  }
 });

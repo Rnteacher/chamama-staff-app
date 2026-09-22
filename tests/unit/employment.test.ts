@@ -5,8 +5,8 @@ import {
   deriveDurationMinutes,
   formatHoursLabel,
   formatWorkSlotsHe,
-  isEligibleYear,
-  schoolYearLabel,
+  hebrewCohortRank,
+  cohortWarning,
 } from "@/lib/employment";
 import {
   employmentPlacementSchema,
@@ -14,22 +14,66 @@ import {
   workLogSchema,
 } from "@/lib/validation";
 
-describe("school-year eligibility (canonical students.school_year)", () => {
-  it("years ב/ג/ד are eligible", () => {
-    expect(isEligibleYear(2)).toBe(true);
-    expect(isEligibleYear(3)).toBe(true);
-    expect(isEligibleYear(4)).toBe(true);
+/**
+ * HEBREW COHORT ORDER (canonical eligibility source — migration 20260923000001).
+ * The first meaningful Hebrew letter of the home-group name is the cohort
+ * rank; the DB derives eligibility from it (youngest active cohort excluded).
+ * These tests verify the TypeScript MIRROR — the canonical decision lives in
+ * the SQL functions and is covered by the SQL suite.
+ */
+describe("hebrew cohort rank — explicit alphabet order (never collation)", () => {
+  it("maps the real cohort names", () => {
+    expect(hebrewCohortRank("ארגמן")).toBe(1);
+    expect(hebrewCohortRank("ברקן")).toBe(2);
+    expect(hebrewCohortRank("גרניום")).toBe(3);
+    expect(hebrewCohortRank("דוריאן")).toBe(4);
+    expect(hebrewCohortRank("הל")).toBe(5);
+    expect(hebrewCohortRank("ולריאן")).toBe(6);
+    expect(hebrewCohortRank("זנגביל")).toBe(7);
   });
 
-  it("year א and unknown are not eligible", () => {
-    expect(isEligibleYear(1)).toBe(false);
-    expect(isEligibleYear(null)).toBe(false);
-    expect(isEligibleYear(undefined)).toBe(false);
+  it("skips the generic leading label קבוצת", () => {
+    expect(hebrewCohortRank("קבוצת דוריאן")).toBe(4);
+    expect(hebrewCohortRank("קבוצת זית")).toBe(7);
   });
 
-  it("labels", () => {
-    expect(schoolYearLabel(2)).toBe("ב");
-    expect(schoolYearLabel(null)).toBe("—");
+  it("normalizes final-letter forms", () => {
+    expect(hebrewCohortRank("ךלב")).toBe(11); // ך = כ
+    expect(hebrewCohortRank("םאן")).toBe(13); // ם = מ
+  });
+
+  it("ignores leading spaces/punctuation and unknown leading letters", () => {
+    expect(hebrewCohortRank("  הל")).toBe(5);
+    expect(hebrewCohortRank('"ולריאן"')).toBe(6);
+    expect(hebrewCohortRank("123 הל")).toBe(5);
+  });
+
+  it("unrecognizable names return null (cannot determine — never guess)", () => {
+    expect(hebrewCohortRank("XYZ")).toBeNull();
+    expect(hebrewCohortRank("123")).toBeNull();
+    expect(hebrewCohortRank("")).toBeNull();
+    expect(hebrewCohortRank(null)).toBeNull();
+  });
+
+  it("youngest = max rank among ACTIVE cohorts; older cohorts eligible", () => {
+    // דוריאן(4) הל(5) ולריאן(6) → ולריאן youngest
+    const active = ["דוריאן", "הל", "ולריאן"].map(hebrewCohortRank);
+    const max = Math.max(...(active as number[]));
+    expect(active.map((r) => (r as number) < max)).toEqual([true, true, false]);
+    // adding זנגביל(7) promotes ולריאן automatically
+    const next = [...(active as number[]), hebrewCohortRank("זנגביל") as number];
+    const max2 = Math.max(...next);
+    expect(next.map((r) => r < max2)).toEqual([true, true, true, false]);
+  });
+
+  it("historical (student-less) cohorts do not participate — documented semantics", () => {
+    // ארגמן(1) ברקן(2) גרניום(3) completed → only CURRENT groups count in
+    // the SQL max; the mirror only provides ranks (the filter is in SQL).
+    expect(hebrewCohortRank("ארגמן")).toBeLessThan(hebrewCohortRank("זנגביל") as number);
+  });
+
+  it("cohort warning text is explicit and includes the group name", () => {
+    expect(cohortWarning("XYZ")).toBe("לא ניתן לזהות את סדר השנתון של הקבוצה XYZ");
   });
 });
 

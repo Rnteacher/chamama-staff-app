@@ -26,7 +26,26 @@ export default async function AppLayout({
 
   const isAdmin =
     me.roles.includes("super_admin") || me.roles.includes("project_coordinator");
+  const isCalendarAdmin =
+    me.roles.includes("leadership") || me.roles.includes("super_admin");
   const viewAs = await getViewAsState();
+
+  // Attendance entry (top-level, never hidden inside Admin):
+  //   leadership/super_admin → the school-wide overview;
+  //   home-group mentors → today's operational attendance for their group(s).
+  const isAttendanceAdmin = isCalendarAdmin;
+  const mentorsCount = isAttendanceAdmin
+    ? 0
+    : me.staffId
+      ? (
+          await supabase
+            .from("group_mentors")
+            .select("group_id", { count: "exact", head: true })
+            .eq("staff_id", me.staffId)
+        ).count ?? 0
+    : 0;
+  const attendanceHref = isAttendanceAdmin ? "/attendance/overview" : "/attendance";
+  const showAttendanceNav = isAttendanceAdmin || mentorsCount > 0;
 
   return (
     <div className="flex min-h-dvh flex-col">
@@ -50,6 +69,22 @@ export default async function AppLayout({
             </span>
           </Link>
           <nav className="flex items-center gap-1 text-sm" aria-label="תפריט עליון">
+            {showAttendanceNav && (
+              <Link
+                href={attendanceHref}
+                className="rounded-full px-3 py-1.5 font-bold text-ink hover:bg-brand-soft/60"
+              >
+                נוכחות
+              </Link>
+            )}
+            {isCalendarAdmin && (
+              <Link
+                href="/calendar"
+                className="rounded-full px-3 py-1.5 font-medium text-muted hover:bg-bg"
+              >
+                לוח שנה
+              </Link>
+            )}
             {isAdmin && (
               <Link
                 href="/admin"

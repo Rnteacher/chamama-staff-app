@@ -353,15 +353,15 @@ do $$ begin
     v_today date := _att_today();
     r jsonb; eff jsonb; n int;
   begin
-    perform public.school_attendance_clear('44444444-4444-4444-4444-444444444401', v_today);
-    r := public.student_day_plan_upsert('44444444-4444-4444-4444-444444444401', v_today, '10:30'::time, null, '×‘×“×™×§×ª ×¨×•×¤×');
+    perform public.school_attendance_clear('44444444-4444-4444-4444-444444444404', v_today);
+    r := public.student_day_plan_upsert('44444444-4444-4444-4444-444444444404', v_today, '10:30'::time, null, '×‘×“×™×§×ª ×¨×•×¤×');
     if (r ->> 'created') <> 'true' then raise exception 'FAIL: plan not created'; end if;
 
     select count(*) into n from public.school_attendance
-     where student_id = '44444444-4444-4444-4444-444444444401' and attendance_date = v_today;
+     where student_id = '44444444-4444-4444-4444-444444444404' and attendance_date = v_today;
     if n <> 0 then raise exception 'FAIL: plan created an attendance row'; end if;
 
-    eff := public.student_effective_school_status('44444444-4444-4444-4444-444444444401', v_today);
+    eff := public.student_effective_school_status('44444444-4444-4444-4444-444444444404', v_today);
     if (eff ->> 'status') <> 'unresolved' then
       raise exception 'FAIL: plan must not change actual status, got %', eff ->> 'status';
     end if;
@@ -370,15 +370,15 @@ do $$ begin
     end if;
 
     -- upsert = same row edited
-    perform public.student_day_plan_upsert('44444444-4444-4444-4444-444444444401', v_today, '11:00'::time, '13:00'::time, '×˜×™×¤×•×œ');
+    perform public.student_day_plan_upsert('44444444-4444-4444-4444-444444444404', v_today, '11:00'::time, '13:00'::time, '×˜×™×¤×•×œ');
     select count(*) into n from public.student_day_plans
-     where student_id = '44444444-4444-4444-4444-444444444401' and plan_date = v_today;
+     where student_id = '44444444-4444-4444-4444-444444444404' and plan_date = v_today;
     if n <> 1 then raise exception 'FAIL: duplicate plan rows'; end if;
 
     -- delete
-    perform public.student_day_plan_delete('44444444-4444-4444-4444-444444444401', v_today);
+    perform public.student_day_plan_delete('44444444-4444-4444-4444-444444444404', v_today);
     select count(*) into n from public.student_day_plans
-     where student_id = '44444444-4444-4444-4444-444444444401' and plan_date = v_today;
+     where student_id = '44444444-4444-4444-4444-444444444404' and plan_date = v_today;
     if n <> 0 then raise exception 'FAIL: plan not deleted'; end if;
 
     raise notice 'PASS: planned arrival/departure separate from actual attendance';
@@ -643,7 +643,7 @@ do $$ begin
     perform public.school_attendance_mark('44444444-4444-4444-4444-444444444401', v_today, 'present', null);
     perform public.school_attendance_mark('44444444-4444-4444-4444-444444444401', v_today, 'absent', null);
     perform public.school_attendance_mark('44444444-4444-4444-4444-444444444401', v_tue, 'present', null); -- override
-    perform public.student_day_plan_upsert('44444444-4444-4444-4444-444444444401', v_today, '10:30'::time, null, '×¤×¨×˜×™');
+    perform public.student_day_plan_upsert('44444444-4444-4444-4444-444444444404', v_today, '10:30'::time, null, '×¤×¨×˜×™');
     perform public.learning_group_attendance_save(
       '66666666-6666-6666-6666-666666666601', _att_monday(), '16:00'::time, '17:30'::time,
       '44444444-4444-4444-4444-444444444401', 'absent', null);
@@ -787,20 +787,26 @@ do $$ begin
   declare
     v_today date := _att_today();
     v_marked int;
+    v_expected int;
+    v_noam_works boolean;
   begin
     -- clean slate for the group/date
     delete from public.school_attendance
      where attendance_date = v_today
        and student_id in (select id from public.students where group_id = '22222222-2222-2222-2222-222222222201');
-    -- טליה has a PLANNED LATE ARRIVAL → the safe bulk must skip her
-    perform public.student_day_plan_upsert('44444444-4444-4444-4444-444444444402', v_today, '10:30'::time, null, 'x');
+    -- מאיה has a PLANNED LATE ARRIVAL → the safe bulk must skip her
+    perform public.student_day_plan_upsert('44444444-4444-4444-4444-444444444404', v_today, '10:30'::time, null, 'x');
     v_marked := public.school_attendance_bulk_mark_present('22222222-2222-2222-2222-222222222201', v_today);
-    -- זית has 4 students; only the 3 without a planned late arrival get marked
-    if v_marked <> 3 then
-      raise exception 'FAIL: bulk must skip planned-late students (marked %)', v_marked;
+    -- expected: all 4 students minus the planned-late one minus any
+    -- expected-at-work student (נועם works Tuesdays — date-dependent)
+    select coalesce(e.expected, false) into v_noam_works
+      from public.is_student_expected_at_work('44444444-4444-4444-4444-444444444401', v_today) e limit 1;
+    v_expected := 4 - 1 - (case when coalesce(v_noam_works, false) then 1 else 0 end);
+    if v_marked <> v_expected then
+      raise exception 'FAIL: bulk marked %, expected %', v_marked, v_expected;
     end if;
     if exists (select 1 from public.school_attendance
-                where student_id = '44444444-4444-4444-4444-444444444402'
+                where student_id = '44444444-4444-4444-4444-444444444404'
                   and attendance_date = v_today) then
       raise exception 'FAIL: planned-late student was bulk-marked';
     end if;

@@ -1,29 +1,67 @@
 /**
  * Employment domain helpers (pure, UI + unit-test friendly).
- * The DATABASE remains the source of truth for authorization, resolution and
- * totals; these helpers mirror canonical SQL semantics (200h target, derived
- * duration, school-year eligibility) for validation and display.
+ * The DATABASE remains the source of truth for authorization, eligibility
+ * and totals; these helpers mirror canonical SQL semantics for validation
+ * and display.
+ *
+ * ELIGIBILITY (canonical SQL: student_employment_eligible, migration
+ * 20260923000001): the home-group naming convention IS the cohort order —
+ * the first meaningful Hebrew letter of the group name (a leading generic
+ * "קבוצת" label is skipped). The ACTIVE home group with the LATEST letter is
+ * the YOUNGEST cohort and is NOT employment-eligible; every older active
+ * cohort IS. The database decides; this mirror exists for display and unit
+ * tests only — never re-derive the decision in React.
  */
 
 export const EMPLOYMENT_TARGET_MINUTES = 12_000; // 200 שעות
 
-/** Canonical school-year representation on students.school_year (1=א..4=ד). */
-export const SCHOOL_YEAR_LABELS: Record<number, string> = {
-  1: "א",
-  2: "ב",
-  3: "ג",
-  4: "ד",
-};
-
-export const EMPLOYMENT_ELIGIBLE_YEARS: readonly number[] = [2, 3, 4];
-
-export function schoolYearLabel(year: number | null | undefined): string {
-  if (year === null || year === undefined) return "—";
-  return SCHOOL_YEAR_LABELS[year] ?? "—";
+/**
+ * TypeScript mirror of public.hebrew_cohort_rank(): explicit Hebrew alphabet
+ * rank (א=1..ת=22, final-letter forms normalized, leading "קבוצת" skipped).
+ * NULL when no meaningful Hebrew letter is found — "cannot determine",
+ * surfaced as an admin warning, never guessed.
+ */
+export function hebrewCohortRank(name: string | null | undefined): number | null {
+  let v = (name ?? "").trim();
+  if (v === "") return null;
+  while (v.startsWith("קבוצת")) v = v.slice("קבוצת".length).trim();
+  for (const ch of v) {
+    switch (ch) {
+      case "א": return 1;
+      case "ב": return 2;
+      case "ג": return 3;
+      case "ד": return 4;
+      case "ה": return 5;
+      case "ו": return 6;
+      case "ז": return 7;
+      case "ח": return 8;
+      case "ט": return 9;
+      case "י": return 10;
+      case "כ": case "ך": return 11;
+      case "ל": return 12;
+      case "מ": case "ם": return 13;
+      case "נ": case "ן": return 14;
+      case "ס": return 15;
+      case "ע": return 16;
+      case "פ": case "ף": return 17;
+      case "צ": case "ץ": return 18;
+      case "ק": return 19;
+      case "ר": return 20;
+      case "ש": return 21;
+      case "ת": return 22;
+      default:
+        break; // keep scanning for the first meaningful Hebrew letter
+    }
+  }
+  return null;
 }
 
-export function isEligibleYear(year: number | null | undefined): boolean {
-  return year !== null && year !== undefined && EMPLOYMENT_ELIGIBLE_YEARS.includes(year);
+export const YOUNGEST_COHORT_NOTE =
+  "קבוצת השנתון הצעירה — לא נכללת בתוכנית התעסוקה";
+
+/** Admin warning for a current group whose cohort order cannot be read. */
+export function cohortWarning(name: string | null | undefined): string {
+  return `לא ניתן לזהות את סדר השנתון של הקבוצה ${name ?? ""}`;
 }
 
 /**
@@ -98,7 +136,8 @@ export const EXCEPTION_KIND_LABELS: Record<string, string> = {
 
 export interface EmploymentOverviewData {
   eligible: boolean;
-  school_year: number | null;
+  /** cohort context: youngest-cohort note or invalid-group-name warning */
+  cohort_note: string | null;
   placement: {
     id: string;
     workplace_name: string;

@@ -27,7 +27,10 @@ enabled = true
 site_url = "http://localhost:3000"
 additional_redirect_urls = ["https://localhost:3000"]
 jwt_expiry = 3600
-enable_refresh_token_rotation = true
+# Local stack only: the E2E suite replays cached auth cookies across test
+# contexts; rotation invalidates the cached refresh token mid-run. The hosted
+# project keeps rotation enabled.
+enable_refresh_token_rotation = false
 enable_signup = true
 
 [auth.email]

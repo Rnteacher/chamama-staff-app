@@ -2,7 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { saveLearningGroupAttendanceAction } from "@/lib/actions/attendance";
+import { saveLearningGroupAttendanceFastAction } from "@/lib/actions/attendance";
+import { useOptimisticAttendance } from "@/components/attendance/useOptimisticAttendance";
 import {
   ATTENDANCE_STATUS_LABELS,
   EFFECTIVE_STATUS_LABELS,
@@ -30,7 +31,9 @@ export interface LgSessionEntry {
 }
 
 /**
- * LEARNING GROUP attendance for one actual scheduled session.
+ * LEARNING GROUP attendance for one actual scheduled session — INSTANT
+ * interaction (optimistic local state + background per-student queue, no
+ * route refresh per mark).
  *
  * Propagation (computed server-side from the canonical resolver — never
  * copied into LG rows, so it can never go stale):
@@ -51,33 +54,35 @@ export default function LearningGroupAttendance({
   readOnly?: boolean;
 }) {
   const router = useRouter();
-  const [pending, startTransition] = useTransition();
+  const [isRefreshing, startRefresh] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [local, setLocal] = useState<Record<string, { status: AttendanceStatus; arrival: string | null }>>({});
   const [lateFor, setLateFor] = useState<string | null>(null);
   const [lateTime, setLateTime] = useState<string>(jerusalemNowHHMM());
+
+  const api = useOptimisticAttendance<{ startTime: string; endTime: string }>(
+    ({ studentId, status, arrivalTime, extra }) =>
+      saveLearningGroupAttendanceFastAction({
+        groupId,
+        date,
+        startTime: extra?.startTime ?? sessions[0]?.start_time ?? "00:00",
+        endTime: extra?.endTime ?? sessions[0]?.end_time ?? "00:00",
+        studentId,
+        status,
+        arrivalTime,
+      }),
+    () => startRefresh(() => router.refresh())
+  );
+  const { state: local, mark, retry, retryAll, pendingCount, errorIds } = api;
 
   const statusOf = (e: LgRosterEntry): AttendanceStatus | null =>
     local[e.student_id]?.status ?? e.status;
 
-  function save(entry: LgRosterEntry, session: LgSessionEntry,
-                status: AttendanceStatus, arrivalTime?: string) {
+  function markStudent(entry: LgRosterEntry, session: LgSessionEntry,
+                       status: AttendanceStatus, arrivalTime?: string) {
     setError(null);
-    const fd = new FormData();
-    fd.set("groupId", groupId);
-    fd.set("date", date);
-    fd.set("startTime", session.start_time);
-    fd.set("endTime", session.end_time);
-    fd.set("studentId", entry.student_id);
-    fd.set("status", status);
-    fd.set("arrivalTime", status === "late" ? (arrivalTime ?? jerusalemNowHHMM()) : "");
-    startTransition(async () => {
-      const res = await saveLearningGroupAttendanceAction(null, fd);
-      if (res.ok) {
-        setLocal((p) => ({ ...p, [entry.student_id]: { status, arrival: arrivalTime ?? null } }));
-        setLateFor(null);
-        router.refresh();
-      } else setError(res.error);
+    mark(entry.student_id, status, status === "late" ? (arrivalTime ?? jerusalemNowHHMM()) : null, {
+      startTime: session.start_time,
+      endTime: session.end_time,
     });
   }
 
@@ -91,7 +96,24 @@ export default function LearningGroupAttendance({
 
   return (
     <div className="flex flex-col gap-5">
-      {error && <p className="rounded-xl bg-red-50 px-4 py-2 text-sm text-danger">{error}</p>}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+        {errorIds.length > 0 ? (
+          <button
+            type="button"
+            onClick={retryAll}
+            className="rounded-full border border-danger px-3 py-1.5 text-xs font-bold text-danger"
+          >
+            {errorIds.length} לא נשמרו — נסו שוב
+          </button>
+        ) : (
+          <span />
+        )}
+        {(pendingCount > 0 || isRefreshing) && (
+          <span className="text-xs text-muted" aria-live="polite">שומר…</span>
+        )}
+        {error && <span className="text-xs text-danger">{error}</span>}
+      </div>
+
       {sessions.map((session) => {
         const reported = session.roster.filter((e) => statusOf(e) !== null).length;
         return (
@@ -111,6 +133,7 @@ export default function LearningGroupAttendance({
             <ul className="divide-y divide-line/60">
               {session.roster.map((entry) => {
                 const st = statusOf(entry);
+                const o = local[entry.student_id];
                 const preResolved = Boolean(entry.school_context);
                 const schoolLabel = entry.school_context
                   ? LG_SCHOOL_CONTEXT_LABELS[entry.school_context]
@@ -120,13 +143,24 @@ export default function LearningGroupAttendance({
                     <div className="min-w-0">
                       <p className="font-bold">
                         {entry.first_name} {entry.last_name}
+                        {o?.save === "error" && (
+                          <span className="mr-2 inline-flex items-center gap-1 rounded-full border border-danger px-2 py-0.5 text-[11px] font-bold text-danger">
+                            לא נשמר
+                            <button type="button" onClick={() => retry(entry.student_id)} className="underline">
+                              נסו שוב
+                            </button>
+                          </span>
+                        )}
+                        {o?.save === "saving" && (
+                          <span className="mr-2 text-[11px] font-bold text-muted">שומר…</span>
+                        )}
                       </p>
                       <p className="text-xs text-muted">
                         {st
                           ? <>
                               {EFFECTIVE_STATUS_LABELS[st]}
-                              {st === "late" && entry.arrival_time &&
-                                <> · הגיע/ה ב־<span dir="ltr">{entry.arrival_time.slice(0, 5)}</span></>}
+                              {st === "late" && (o?.arrival ?? entry.arrival_time) &&
+                                <> · הגיע/ה ב־<span dir="ltr">{o?.arrival ?? entry.arrival_time}</span></>}
                             </>
                           : "טרם דווח"}
                         {schoolLabel && (
@@ -153,16 +187,18 @@ export default function LearningGroupAttendance({
                           <button
                             key={opt}
                             type="button"
-                            disabled={pending}
                             onClick={() => {
                               if (opt === "late") {
+                                // instant: mark late with the current Jerusalem time;
+                                // the inline input then allows correcting the time
                                 setLateTime(jerusalemNowHHMM());
                                 setLateFor(entry.student_id);
+                                markStudent(entry, session, "late", jerusalemNowHHMM());
                               } else {
-                                save(entry, session, opt);
+                                markStudent(entry, session, opt);
                               }
                             }}
-                            className={`rounded-full border px-3 py-1 text-xs font-bold disabled:opacity-60 ${
+                            className={`rounded-full border px-3 py-1 text-xs font-bold ${
                               opt === "present"
                                 ? "border-emerald-300 bg-emerald-50 text-emerald-900"
                                 : opt === "absent"
@@ -184,11 +220,11 @@ export default function LearningGroupAttendance({
                             />
                             <button
                               type="button"
-                              disabled={pending || !/^\d{2}:\d{2}$/.test(lateTime)}
-                              onClick={() => save(entry, session, "late", lateTime)}
+                              disabled={!/^\d{2}:\d{2}$/.test(lateTime)}
+                              onClick={() => markStudent(entry, session, "late", lateTime)}
                               className="rounded-full bg-ink px-3 py-1 text-xs font-extrabold text-white disabled:opacity-60"
                             >
-                              שמירה
+                              עדכון שעה
                             </button>
                           </>
                         )}

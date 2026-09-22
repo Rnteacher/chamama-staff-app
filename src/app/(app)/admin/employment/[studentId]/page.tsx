@@ -8,7 +8,7 @@ import { getViewAsState } from "@/lib/view-as";
 import PlacementEditor from "@/components/employment/PlacementEditor";
 import WorkLogsPanel, { type WorkLogRow } from "@/components/employment/WorkLogsPanel";
 import ExceptionsPanel, { type ExceptionRow } from "@/components/employment/ExceptionsPanel";
-import { computeEmploymentProgress, schoolYearLabel } from "@/lib/employment";
+import { computeEmploymentProgress } from "@/lib/employment";
 
 export const metadata = { title: "ניהול תעסוקה · חניך" };
 
@@ -32,7 +32,7 @@ export default async function EmploymentDetailPage({
   const [studentRes, overviewRes] = await Promise.all([
     supabase
       .from("students")
-      .select("id, first_name, last_name, school_year, greenhouse_groups(name)")
+      .select("id, first_name, last_name, greenhouse_groups(name)")
       .eq("id", studentId)
       .maybeSingle(),
     supabase.rpc("student_employment_overview", { p_student_id: studentId }),
@@ -42,7 +42,6 @@ export default async function EmploymentDetailPage({
     id: string;
     first_name: string;
     last_name: string;
-    school_year: number | null;
     greenhouse_groups: { name: string } | null;
   } | null;
   if (!student) notFound();
@@ -75,9 +74,7 @@ export default async function EmploymentDetailPage({
           </h1>
           <p className="mt-0.5 text-sm text-muted">
             {student.greenhouse_groups?.name ?? "—"} ·{" "}
-            {student.school_year === null
-              ? "שנה לא הוגדרה"
-              : `שכבה ${schoolYearLabel(student.school_year)}`}
+            {overview.eligible ? "זכאי/ת לתוכנית התעסוקה" : "לא זכאי/ת (שנתון צעיר)"}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -92,10 +89,10 @@ export default async function EmploymentDetailPage({
         data={{
           studentId: student.id,
           studentName: `${student.first_name} ${student.last_name}`,
-          schoolYear: student.school_year,
           placement: overview.placement,
           weeklySlots: overview.weekly_slots ?? [],
           eligible: overview.eligible,
+          cohortNote: overview.cohort_note ?? null,
         }}
         readOnly={!canManage}
       />

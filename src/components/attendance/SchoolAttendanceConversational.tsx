@@ -3,9 +3,10 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
-  markSchoolAttendanceAction,
+  markSchoolAttendanceFastAction,
   clearSchoolAttendanceAction,
 } from "@/lib/actions/attendance";
+import { useOptimisticAttendance } from "@/components/attendance/useOptimisticAttendance";
 import {
   ATTENDANCE_STATUS_LABELS,
   EFFECTIVE_STATUS_LABELS,
@@ -18,18 +19,18 @@ import {
 } from "@/lib/attendance";
 
 /**
- * MOBILE conversational school attendance — student by student.
+ * MOBILE conversational school attendance — student by student, INSTANT.
  *
- * Product rules encoded here:
- *   * reopen ordering: absent FIRST, then late, unrecorded, present,
- *     expected-at-work (sorted via the shared pure helper — never re-derived).
- *   * expected-at-work students are SKIPPED by default with a compact
- *     "בעבודה" card + a secondary explicit override ("הגיע/ה לבית הספר").
- *   * planned arrival/departure are shown PROMINENTLY but are not part of
- *     the choice list (they are plans, not attendance statuses).
- *   * single-choice answers auto-advance; איחור collects an editable arrival
- *     time prefilled with the current Asia/Jerusalem time.
- *   * re-opening/change updates the SAME record (server upsert).
+ * Every tap (נוכח/חסר/איחור) updates local state and advances to the next
+ * student IMMEDIATELY (<100ms, no network wait). Persistence happens in a
+ * background per-student queue through the fast server action (no
+ * revalidate/refresh in the interaction loop; the route refreshes once when
+ * the queue drains). Failed saves are visible ("לא נשמר") and retriable
+ * without losing the chosen value or moving the flow backwards.
+ *
+ * Product rules (unchanged): absent-first reopen ordering, expected-work
+ * students skipped with an explicit override, planned day exceptions shown
+ * prominently but never as attendance choices.
  */
 export default function SchoolAttendanceConversational({
   students,
@@ -37,21 +38,40 @@ export default function SchoolAttendanceConversational({
   readOnly = false,
 }: {
   students: SchoolAttendanceRosterRow[];
+  studentsVersion?: number;
   date: string;
   readOnly?: boolean;
 }) {
   const router = useRouter();
-  const [pending, startTransition] = useTransition();
+  const [isRefreshing, startRefresh] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  // local optimistic status per student (immediate feedback, server is truth)
-  const [local, setLocal] = useState<Record<string, { status: EffectiveStatus; arrival?: string | null }>>({});
+
+  // optimistic local state + background save queue
+  const api = useOptimisticAttendance(
+    ({ studentId, status, arrivalTime }) =>
+      markSchoolAttendanceFastAction({ studentId, date, status, arrivalTime }),
+    () => startRefresh(() => router.refresh()) // once, when the queue drains
+  );
+  const { state: local, mark, retry, retryAll, pendingCount, errorIds } = api;
+
+  // frozen session queue: absent-first order computed once per date —
+  // re-sorting mid-flow would jump the mentor around; the drain-refresh
+  // applies the canonical order on the next visit
   const [index, setIndex] = useState(0);
-  // late-arrival time for the CURRENT student (prefilled at selection time)
-  const [lateTime, setLateTime] = useState<string>(jerusalemNowHHMM());
+  const [queueDate, setQueueDate] = useState(date);
+  const [queue, setQueue] = useState<SchoolAttendanceRosterRow[]>(() =>
+    sortRosterForReopen(students)
+  );
+  if (queueDate !== date) {
+    setQueueDate(date);
+    setQueue(sortRosterForReopen(students));
+    setIndex(0);
+  }
   // students expected at work stay collapsed until explicitly overridden
   const [workRevealed, setWorkRevealed] = useState<Record<string, boolean>>({});
+  // arrival-time editor value for the current card
+  const [lateTime, setLateTime] = useState<string>(jerusalemNowHHMM());
 
-  const queue = useMemo(() => sortRosterForReopen(students), [students]);
   const resolved = useMemo(() => {
     const map = new Map<string, EffectiveStatus>();
     for (const s of queue) {
@@ -68,54 +88,41 @@ export default function SchoolAttendanceConversational({
 
   const current = queue[Math.min(index, queue.length - 1)];
 
-  function apply(studentId: string, status: EffectiveStatus, arrival?: string | null) {
-    setLocal((p) => ({ ...p, [studentId]: { status, arrival: arrival ?? null } }));
-  }
-
   function advance() {
     setLateTime(jerusalemNowHHMM());
-    // jump to the next student that still needs attention (absent → unresolved → …)
-    const nextIdx = queue.findIndex((s, i) => {
-      if (i <= index) return false;
-      const st = resolved.get(s.student_id);
-      return st === "absent" || st === "late" || st === "unresolved";
+    setIndex((at) => {
+      const nextIdx = queue.findIndex((s, i) => {
+        if (i <= at) return false;
+        const st = resolved.get(s.student_id);
+        return st === "absent" || st === "late" || st === "unresolved";
+      });
+      return nextIdx === -1 ? Math.min(at + 1, queue.length - 1) : nextIdx;
     });
-    setIndex(nextIdx === -1 ? Math.min(index + 1, queue.length - 1) : nextIdx);
   }
 
-  function save(studentId: string, status: "present" | "absent" | "late", arrivalTime?: string) {
+  /** INSTANT: local update + advance happen now; the save is backgrounded. */
+  function tap(studentId: string, status: "present" | "absent" | "late", arrivalTime?: string) {
+    if (readOnly) return;
+    setError(null);
+    mark(studentId, status, status === "late" ? (arrivalTime ?? jerusalemNowHHMM()) : null);
+    advance();
+  }
+
+  /** Edit the arrival time of the CURRENT student without advancing. */
+  function updateArrival(studentId: string, arrivalTime: string) {
+    if (readOnly || !/^\d{2}:\d{2}$/.test(arrivalTime)) return;
+    mark(studentId, "late", arrivalTime);
+  }
+
+  function clearRecord(studentId: string) {
     if (readOnly) return;
     setError(null);
     const fd = new FormData();
     fd.set("studentId", studentId);
     fd.set("date", date);
-    fd.set("status", status);
-    fd.set("arrivalTime", status === "late" ? (arrivalTime ?? jerusalemNowHHMM()) : "");
-    startTransition(async () => {
-      const res = await markSchoolAttendanceAction(null, fd);
-      if (res.ok) {
-        apply(studentId, status, status === "late" ? (arrivalTime ?? jerusalemNowHHMM()) : null);
-        advance();
-        router.refresh();
-      } else {
-        setError(res.error);
-      }
-    });
-  }
-
-  function clearRecord(studentId: string) {
-    if (readOnly) return;
-    const fd = new FormData();
-    fd.set("studentId", studentId);
-    fd.set("date", date);
-    startTransition(async () => {
+    startRefresh(async () => {
       const res = await clearSchoolAttendanceAction(null, fd);
       if (res.ok) {
-        setLocal((p) => {
-          const next = { ...p };
-          delete next[studentId];
-          return next;
-        });
         router.refresh();
       } else {
         setError(res.error);
@@ -127,6 +134,7 @@ export default function SchoolAttendanceConversational({
 
   const eff = current.effective;
   const curStatus = resolved.get(current.student_id) ?? eff.status;
+  const curLocal = local[current.student_id];
   const revealed = Boolean(workRevealed[current.student_id]);
   const planLine = formatPlanHe(eff);
 
@@ -136,15 +144,34 @@ export default function SchoolAttendanceConversational({
         <span className="font-bold">
           {reported} מתוך {queue.length} דווחו
         </span>
-        {error && <span className="text-xs text-danger">{error}</span>}
+        <span className="flex items-center gap-2 text-xs">
+          {errorIds.length > 0 && (
+            <button
+              type="button"
+              onClick={retryAll}
+              className="rounded-full border border-danger px-2.5 py-1 font-bold text-danger"
+            >
+              {errorIds.length} לא נשמרו — נסו שוב
+            </button>
+          )}
+          {(pendingCount > 0 || isRefreshing) && (
+            <span className="text-muted" aria-live="polite">
+              {pendingCount > 0 ? "שומר…" : "מעדכן…"}
+            </span>
+          )}
+          {error && <span className="text-danger">{error}</span>}
+        </span>
       </div>
 
       {/* progress dots */}
       <div className="flex flex-wrap gap-1" aria-hidden="true">
         {queue.map((s) => {
-          const st = resolved.get(s.student_id);
+          const o = local[s.student_id];
+          const st = o ? o.status : s.effective.status;
           const cls =
-            st === "present" ? "bg-emerald-500"
+            o?.save === "error" ? "bg-danger ring-2 ring-danger ring-offset-1"
+            : o?.save === "saving" || o?.save === "pending" ? "bg-amber-400 animate-pulse"
+            : st === "present" ? "bg-emerald-500"
             : st === "absent" ? "bg-danger"
             : st === "late" ? "bg-amber-500"
             : st === "expected_work" ? "bg-line"
@@ -162,10 +189,25 @@ export default function SchoolAttendanceConversational({
             {curStatus !== "unresolved" && (
               <p className="mt-0.5 text-sm text-muted">
                 סטטוס נוכחי: <span className="font-bold text-ink">{EFFECTIVE_STATUS_LABELS[curStatus]}</span>
-                {curStatus === "late" && eff.arrival_time && (
-                  <> · הגיע/ה ב־<span dir="ltr">{normalizeDbTime(eff.arrival_time)}</span></>
+                {curStatus === "late" && (curLocal?.arrival ?? eff.arrival_time) && (
+                  <> · הגיע/ה ב־<span dir="ltr">{curLocal?.arrival ?? normalizeDbTime(eff.arrival_time)}</span></>
                 )}
               </p>
+            )}
+            {curLocal?.save === "error" && (
+              <p className="mt-1 flex items-center gap-2 text-sm font-bold text-danger">
+                לא נשמר
+                <button
+                  type="button"
+                  onClick={() => retry(current.student_id)}
+                  className="rounded-full border border-danger px-3 py-1 text-xs font-bold text-danger"
+                >
+                  נסו שוב
+                </button>
+              </p>
+            )}
+            {curLocal?.save === "saving" && (
+              <p className="mt-1 text-xs text-muted">שומר…</p>
             )}
           </div>
           <span className="shrink-0 text-xs text-muted">
@@ -211,12 +253,13 @@ export default function SchoolAttendanceConversational({
                 <button
                   key={st}
                   type="button"
-                  disabled={pending || readOnly}
+                  disabled={readOnly}
                   onClick={() => {
                     if (st === "late") {
-                      setLateTime(jerusalemNowHHMM());
+                      // instant: save late with the current Jerusalem time
+                      tap(current.student_id, "late", jerusalemNowHHMM());
                     } else {
-                      save(current.student_id, st);
+                      tap(current.student_id, st);
                     }
                   }}
                   className={`min-h-[52px] rounded-2xl border px-3 py-3 text-base font-extrabold transition-colors ${
@@ -231,7 +274,7 @@ export default function SchoolAttendanceConversational({
                 </button>
               ))}
             </div>
-            {/* איחור: editable arrival time prefilled with current Jerusalem time */}
+            {/* arrival-time editor (correct a late time without advancing) */}
             {curStatus !== "expected_work" && (
               <div className="flex items-center gap-2 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3">
                 <label className="flex flex-1 items-center gap-2 text-sm font-bold text-amber-900">
@@ -246,18 +289,17 @@ export default function SchoolAttendanceConversational({
                 </label>
                 <button
                   type="button"
-                  disabled={pending || readOnly || !/^\d{2}:\d{2}$/.test(lateTime)}
-                  onClick={() => save(current.student_id, "late", lateTime)}
+                  disabled={readOnly || !/^\d{2}:\d{2}$/.test(lateTime)}
+                  onClick={() => updateArrival(current.student_id, lateTime)}
                   className="rounded-full bg-ink px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60"
                 >
-                  שמירה
+                  עדכון שעה
                 </button>
               </div>
             )}
             {curStatus !== "unresolved" && !readOnly && (
               <button
                 type="button"
-                disabled={pending}
                 onClick={() => clearRecord(current.student_id)}
                 className="self-start rounded-full px-2 py-1 text-xs font-semibold text-muted hover:bg-bg"
               >

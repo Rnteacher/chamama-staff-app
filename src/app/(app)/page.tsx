@@ -216,6 +216,7 @@ export default async function HomePage() {
 
   const totalUnread = [...unreadByStudent.values()].reduce((a, b) => a + b, 0);
   const privileged = isPrivileged(me);
+  const isCalendarAdmin = me.roles.includes("leadership") || me.roles.includes("super_admin");
   const roleChips = me.roles.map((r) => ROLE_LABELS[r]).join(" · ");
 
   // dashboard rows — View-As rows have no flag columns
@@ -251,9 +252,14 @@ export default async function HomePage() {
             היום שלי
             <span className="mr-2 text-sm font-medium text-muted">{WEEKDAY_SHORT_LABELS[jp.weekday]}</span>
           </h2>
-          <Link href="/calendar" className="text-sm font-medium text-muted hover:text-ink">
-            לוח שנה ›
-          </Link>
+          {/* full calendar MANAGEMENT is leadership/super_admin only — ordinary
+              staff see their events here and in the daily schedule, without a
+              management-calendar entry */}
+          {isCalendarAdmin && (
+            <Link href="/calendar" className="text-sm font-medium text-muted hover:text-ink">
+              לוח שנה ›
+            </Link>
+          )}
         </div>
         {myDay.length === 0 ? (
           <EmptyState
@@ -264,9 +270,15 @@ export default async function HomePage() {
           <ul className="flex flex-col gap-2">
             {myDay.map((item) => {
               const current = !item.isAllDay && isNow(item);
+              // the calendar management screen is leadership/super_admin only —
+              // strip calendar links from schedule items for everyone else
+              const linkPath =
+                item.linkPath?.startsWith("/calendar") && !isCalendarAdmin
+                  ? null
+                  : item.linkPath;
               return (
                 <li key={`${item.sourceType}-${item.sourceId}-${item.startAt}`}>
-                  <DayItemLink item={item} current={current} />
+                  <DayItemLink item={{ ...item, linkPath }} current={current} />
                 </li>
               );
             })}
@@ -274,16 +286,16 @@ export default async function HomePage() {
         )}
       </section>
 
-      {/* -------------------------------------- נוכחות (mobile fast entry) */}
+      {/* -------------------------------------- נוכחות (fast daily entry) */}
       {!useViewAs && (attendanceGroups.length > 0 || myLgSessions.length > 0) && (
-        <section aria-labelledby="attendance-heading" className="lg:hidden">
+        <section aria-labelledby="attendance-heading">
           <div className="mb-2 flex items-center justify-between">
             <h2 id="attendance-heading" className="font-extrabold">
               נוכחות היום
             </h2>
-            {isBroad && (
+            {isCalendarAdmin && (
               <Link href="/attendance/overview" className="text-sm font-medium text-muted hover:text-ink">
-                סקירה ›
+                סקירת כל הקבוצות ›
               </Link>
             )}
           </div>
@@ -294,35 +306,41 @@ export default async function HomePage() {
                 <li key={g.id}>
                   <Link
                     href={`/attendance?group=${g.id}`}
-                    className="flex min-h-[56px] items-center justify-between gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40"
+                    className="flex min-h-[64px] items-center justify-between gap-3 rounded-2xl border-2 border-brand-dark bg-brand-soft/60 px-4 py-3 font-bold hover:bg-brand-soft"
                   >
                     <span className="min-w-0">
-                      <span className="block font-bold">נוכחות קבוצת האם · {g.name}</span>
+                      <span className="block text-base font-extrabold">
+                        נוכחות קבוצת האם · {g.name}
+                      </span>
                       {c && (
-                        <span className="block truncate text-xs text-muted">
+                        <span className="block truncate text-xs font-semibold text-ink/80">
                           {c.resolved}/{c.total} דווחו · {c.absent} חסרים · {c.late} מאחרים
                         </span>
                       )}
                     </span>
-                    <span className="shrink-0 text-xs font-semibold text-muted">פתיחה ›</span>
+                    <span className="shrink-0 rounded-full bg-ink px-3 py-1.5 text-xs font-extrabold text-white">
+                      פתיחה ›
+                    </span>
                   </Link>
                 </li>
               );
             })}
             {myLgSessions.map((s) => (
               <li key={`${s.learning_group_id}-${s.start_time}`}>
-                <Link
-                  href={`/groups/learning/${s.learning_group_id}/attendance`}
-                  className="flex min-h-[56px] items-center justify-between gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40"
-                >
-                  <span className="min-w-0">
-                    <span className="block font-bold">נוכחות קבוצת למידה · {s.group_name}</span>
-                    <span className="block text-xs text-muted" dir="ltr">
-                      {s.start_time.slice(0, 5)}–{s.end_time.slice(0, 5)}
+                <div className="flex min-h-[56px] items-stretch gap-2">
+                  <Link
+                    href={`/groups/learning/${s.learning_group_id}/attendance?date=${todayISO}`}
+                    className="flex flex-1 items-center justify-between gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40"
+                  >
+                    <span className="min-w-0">
+                      <span className="block font-bold">נוכחות קבוצת למידה · {s.group_name}</span>
+                      <span className="block text-xs text-muted" dir="ltr">
+                        {s.start_time.slice(0, 5)}–{s.end_time.slice(0, 5)}
+                      </span>
                     </span>
-                  </span>
-                  <span className="shrink-0 text-xs font-semibold text-muted">פתיחה ›</span>
-                </Link>
+                    <span className="shrink-0 text-xs font-semibold text-muted">פתיחה ›</span>
+                  </Link>
+                </div>
               </li>
             ))}
           </ul>
@@ -341,29 +359,42 @@ export default async function HomePage() {
           />
         ) : (
           <ul className="flex flex-col gap-2">
-            {learningGroupsToday.map((g) => (
-              <li key={`${g.id}-${g.slot.startTime}`}>
-                <Link
-                  href={`/groups/learning/${g.id}`}
-                  className="flex min-h-[56px] items-center justify-between gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40"
-                >
-                  <span className="min-w-0">
-                    <span className="block font-bold">{g.name}</span>
-                    <span className="block truncate text-xs text-muted">
-                      {[
-                        g.staffLeaders.length > 0 ? `מדריכים: ${g.staffLeaders.join(", ")}` : null,
-                        g.studentLeaders.length > 0 ? `מובילים: ${g.studentLeaders.join(", ")}` : null,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
+            {learningGroupsToday.map((g) => {
+              // staff leaders get a direct נוכחות action for today's session
+              const leadsToday = myLgSessions.some((s) => s.learning_group_id === g.id);
+              return (
+                <li key={`${g.id}-${g.slot.startTime}`} className="flex items-stretch gap-2">
+                  <Link
+                    href={`/groups/learning/${g.id}`}
+                    className="flex min-h-[56px] flex-1 items-center justify-between gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40"
+                  >
+                    <span className="min-w-0">
+                      <span className="block font-bold">{g.name}</span>
+                      <span className="block truncate text-xs text-muted">
+                        {[
+                          g.staffLeaders.length > 0 ? `מדריכים: ${g.staffLeaders.join(", ")}` : null,
+                          g.studentLeaders.length > 0 ? `מובילים: ${g.studentLeaders.join(", ")}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
                     </span>
-                  </span>
-                  <span className="shrink-0 text-xs font-semibold text-muted" dir="ltr">
-                    {formatWeeklySlotHe(g.slot).replace(/^יום \S+ /, "")}
-                  </span>
-                </Link>
-              </li>
-            ))}
+                    <span className="shrink-0 text-xs font-semibold text-muted" dir="ltr">
+                      {formatWeeklySlotHe(g.slot).replace(/^יום \S+ /, "")}
+                    </span>
+                  </Link>
+                  {leadsToday && (
+                    <Link
+                      href={`/groups/learning/${g.id}/attendance?date=${todayISO}`}
+                      className="flex min-h-[56px] shrink-0 items-center rounded-2xl border-2 border-brand-dark bg-brand-soft px-4 font-extrabold text-ink hover:bg-brand-soft/70"
+                      aria-label={`נוכחות · ${g.name}`}
+                    >
+                      נוכחות
+                    </Link>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

@@ -329,21 +329,10 @@ select '77777777-7777-7777-7777-777777777711',
 on conflict do nothing;
 
 -- ------------------------------------------------- student employment -------
--- Canonical school years (1=א 2=ב 3=ג 4=ד): 401–404 = ג, 405–408 = ב,
--- 409–40c = ד, 40d+ = א (not employment-eligible).
-update public.students set school_year = 3
- where id between '44444444-4444-4444-4444-444444444401' and '44444444-4444-4444-4444-444444444404';
-update public.students set school_year = 2
- where id between '44444444-4444-4444-4444-444444444405' and '44444444-4444-4444-4444-444444444408';
-update public.students set school_year = 4
- where id between '44444444-4444-4444-4444-444444444409' and '44444444-4444-4444-4444-44444444440c';
-update public.students set school_year = 1
- where id between '44444444-4444-4444-4444-44444444440d' and '44444444-4444-4444-4444-4444444444ff';
--- תהל מוסקל demonstrates the real pre-deploy state: an existing student whose
--- year was never set (school_year NULL) — surfaced as "שנה לא הוגדרה" in the
--- employment screen until leadership/super_admin set it explicitly.
-update public.students set school_year = null
- where id = '44444444-4444-4444-4444-44444444440e';
+-- Employment eligibility is DERIVED from the home-group cohort order
+-- (first Hebrew letter of the group name; migration 20260923000001) —
+-- no per-student school_year assignment exists in the product model.
+-- Seeded cohorts: קבוצת זית=ז, שקד=ש, רימון=ר, דקל=ד → youngest = שקד.
 
 -- a real employment coordinator (רכז/ת תעסוקה): איתי גפן
 insert into public.user_roles (staff_id, role)

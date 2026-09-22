@@ -27,7 +27,7 @@ async function loginAndGoTo(
 test.describe("employment management (desktop)", () => {
   test.skip(({ viewport }) => (viewport?.width ?? 0) < 1024, "desktop-only view");
 
-  test("admin table renders with progress columns and filters", async ({ page }) => {
+  test("admin table renders with progress columns, cohort eligibility and filters", async ({ page }) => {
     await loginAndGoTo(page, USERS.admin, "/admin/employment");
 
     await expect(page.getByRole("heading", { name: "ניהול תעסוקה" })).toBeVisible();
@@ -46,40 +46,21 @@ test.describe("employment management (desktop)", () => {
       aboveRow.locator('span[style*="width"]').last()
     ).toHaveAttribute("style", /width:\s*100(\.0)?%/);
 
-    // missing year is SURFACED, not hidden (תהל מוסקל is seeded without a year)
-    await expect(page.getByText("שנה לא הוגדרה").first()).toBeVisible();
-
-    // "year not set" filter isolates exactly those students
-    await page.getByLabel("שכבה").selectOption("0");
-    await expect(page.getByText("תהל מוסקל").first()).toBeVisible();
-    await expect(page.getByText("נועם אבידן").first()).toBeHidden();
-
-    // back to all
-    await page.getByLabel("שכבה").selectOption({ label: "הכל" });
-
-    // leadership/super_admin sets the missing year inline → student becomes
-    // employment-relevant with a real year (badge disappears after refresh;
-    // the transient success message may unmount with its row, so assert the
-    // actual outcome)
-    await page.locator("#year-44444444-4444-4444-4444-44444444440e").selectOption("2");
-    await page.getByRole("button", { name: "שמירת שנה" }).click();
-    await expect(page.getByText("שנה לא הוגדרה").first()).toBeHidden({ timeout: 15_000 });
+    // cohort eligibility is DERIVED (no per-student year UI anywhere):
+    // seeded cohorts זית=ז(7) שקד=ש(21) רימון=ר(20) דקל=ד(4) → שקד youngest
+    await expect(page.getByRole("columnheader", { name: "זכאות" })).toBeVisible();
+    const shakedRow = page.locator("tr", { hasText: "ליאו הלוי" }).first();
+    await expect(shakedRow.getByText("לא · שנתון צעיר")).toBeVisible();
+    const zionRow = page.locator("tr", { hasText: "נועם אבידן" }).first();
+    await expect(zionRow.getByText("כן", { exact: true })).toBeVisible();
+    // no per-student year workflow exists anymore
+    await expect(page.getByText("שנה לא הוגדרה")).toHaveCount(0);
+    await expect(page.getByLabel("שכבה")).toHaveCount(0);
 
     // status filter: only placement-less students remain
     await page.getByLabel("שיבוץ").selectOption({ label: "ללא שיבוץ" });
     await expect(page.getByText("מאיה דרורי").first()).toBeVisible();
     await expect(page.getByText("נועם אבידן").first()).toBeHidden();
-
-    // cleanup: restore the seed state (year cleared via admin students)
-    await page.goto("/admin/students");
-    const article = page.locator("article", { hasText: "תהל מוסקל" }).first();
-    await article.getByText("עריכה").click();
-    await article.getByLabel("שכבה").selectOption({ label: "— ללא —" });
-    await article.getByRole("button", { name: "שמירה" }).click();
-    await expect(page.getByText("הפעולה בוצעה").first()).toBeVisible();
-
-    await page.goto("/admin/employment");
-    await expect(page.getByText("שנה לא הוגדרה").first()).toBeVisible();
   });
 
   test("coordinator creates a placement with weekly slots; student page reflects it", async ({
@@ -87,9 +68,16 @@ test.describe("employment management (desktop)", () => {
   }) => {
     await loginAndGoTo(page, USERS.coordinator, "/admin/employment/44444444-4444-4444-4444-444444444402");
 
-    await page.getByLabel("מקום עבודה").fill("חממת הבדיקות");
-    await page.getByRole("button", { name: "יצירת שיבוץ" }).click();
-    await expect(page.getByText("הפעולה בוצעה")).toBeVisible();
+    // idempotent across suite runs: a placement from a previous run puts the
+    // editor in edit mode with the same workplace already saved
+    const create = page.getByRole("button", { name: "יצירת שיבוץ" });
+    if (await create.isVisible().catch(() => false)) {
+      await page.getByLabel("מקום עבודה").fill("חממת הבדיקות");
+      await create.click();
+      await expect(page.getByText("הפעולה בוצעה")).toBeVisible();
+    } else {
+      await expect(page.getByText("עריכת שיבוץ לעבודה")).toBeVisible();
+    }
 
     // student page shows the employment summary
     await page.goto("/students/44444444-4444-4444-4444-444444444402");
