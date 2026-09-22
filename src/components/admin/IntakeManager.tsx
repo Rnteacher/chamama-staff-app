@@ -72,6 +72,8 @@ export default function IntakeManager({
   const [majorFilter, setMajorFilter] = useState("");
   const [windowFilter, setWindowFilter] = useState("");
   const [csvWindowId, setCsvWindowId] = useState("");
+  const [csvGroupId, setCsvGroupId] = useState("");
+  const [csvMajorId, setCsvMajorId] = useState("");
 
   const filtered = submissions.filter((s) => {
     if (groupFilter && s.groupId !== groupFilter) return false;
@@ -111,7 +113,8 @@ export default function IntakeManager({
           </div>
         </div>
 
-        {/* CSV export — requires selecting exactly ONE intake window */}
+        {/* CSV export — requires selecting exactly ONE intake window; the
+            group/major filters compose with it and are enforced server-side */}
         <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-bg p-3">
           <h3 className="text-sm font-extrabold">יצוא CSV</h3>
           <label className="text-xs font-semibold text-muted">
@@ -129,8 +132,38 @@ export default function IntakeManager({
               ))}
             </select>
           </label>
+          <label className="text-xs font-semibold text-muted">
+            קבוצה
+            <select
+              value={csvGroupId}
+              onChange={(e) => setCsvGroupId(e.target.value)}
+              className="mr-2 rounded-xl border border-line bg-white px-3 py-2 text-sm"
+            >
+              <option value="">הכל</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs font-semibold text-muted">
+            מגמה
+            <select
+              value={csvMajorId}
+              onChange={(e) => setCsvMajorId(e.target.value)}
+              className="mr-2 rounded-xl border border-line bg-white px-3 py-2 text-sm"
+            >
+              <option value="">הכל</option>
+              {majors.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+          </label>
           <a
-            href={csvWindowId ? `/admin/intake/export?intakeId=${csvWindowId}` : undefined}
+            href={
+              csvWindowId
+                ? `/admin/intake/export?intakeId=${csvWindowId}${csvGroupId ? `&groupId=${csvGroupId}` : ""}${csvMajorId ? `&majorId=${csvMajorId}` : ""}`
+                : undefined
+            }
             onClick={(e) => {
               if (!csvWindowId) e.preventDefault();
             }}

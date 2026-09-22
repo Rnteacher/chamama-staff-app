@@ -326,7 +326,7 @@ export default function EventEditorDialog({
                 <div className="mt-2 flex flex-col gap-3">
                   <MultiSelectCheckbox
                     name="audHomeGroupsDisplay"
-                    label="קבוצות אם"
+                    label="קבוצות"
                     options={options.groups.map((g) => ({ id: g.id, label: g.name }))}
                     selectedIds={aud.homeGroupIds}
                     searchable={false}
@@ -470,7 +470,7 @@ export default function EventEditorDialog({
                           : a.type === "staff_only"
                             ? "צוות בלבד"
                             : a.type === "home_group"
-                              ? "קבוצת אם"
+                              ? "קבוצה"
                               : a.type === "major"
                                 ? "מגמה"
                                 : a.type === "learning_group"

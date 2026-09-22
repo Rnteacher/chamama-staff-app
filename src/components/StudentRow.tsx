@@ -22,7 +22,7 @@ export default function StudentRow({
   return (
     <li>
       <Link
-        href={`/students/${student.id}`}
+        href={`/students/${student.id}`} prefetch={false}
         className="flex min-h-[64px] items-center gap-3 rounded-2xl border border-line bg-surface px-4 py-3 transition-colors hover:bg-brand-soft/40"
       >
         <span

@@ -42,11 +42,13 @@ async function loginAndGoTo(
 }
 
 test.describe("groups screen: two sections", () => {
-  test("shows קבוצות אם and קבוצות למידה separately", async ({ page }) => {
+  test("shows קבוצות and קבוצות למידה separately", async ({ page }) => {
     await loginAndGoTo(page, USERS.staff, "/groups");
 
-    await expect(page.getByRole("heading", { name: "קבוצות אם" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "קבוצות", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "קבוצות למידה" })).toBeVisible();
+    // terminology: the old "קבוצת אם" wording is gone
+    await expect(page.getByText(/קבוצת אם|קבוצות אם/)).toHaveCount(0);
 
     // learning-group card shows slots + member count
     const photoCard = page.getByRole("link", { name: /קבוצת צילום/ }).first();

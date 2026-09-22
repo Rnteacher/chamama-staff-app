@@ -26,12 +26,18 @@ begin
 end $$;
 
 -- seed UUID constants
--- noam      = 44444444-4444-4444-4444-444444444401  (ג, active placement)
--- tamar     = 44444444-4444-4444-4444-444444444405  (ב, exactly 200h)
--- gili      = 44444444-4444-4444-4444-444444444409  (ד, above 200h)
--- opaz      = 44444444-4444-4444-4444-444444444402  (ג, no placement)
--- aleph     = 44444444-4444-4444-4444-44444444440d  (א, not eligible)
+-- noam      = 44444444-4444-4444-4444-444444444401  (זית, active placement)
+-- tamar     = 44444444-4444-4444-4444-444444444405  (שקד, exactly 200h)
+-- gili      = 44444444-4444-4444-4444-444444444409  (רימון, above 200h)
+-- opaz      = 44444444-4444-4444-4444-444444444402  (רימון, no placement)
+-- aleph     = 44444444-4444-4444-4444-44444444440d  (דקל = oldest cohort → eligible)
+-- shachar   = 44444444-4444-4444-4444-444444444406  (שקד = youngest cohort → NOT eligible)
 -- noam_place= 88888888-8888-8888-8888-888888888802
+--
+-- ELIGIBILITY CONTRACT (migrations 20260923000001/2): per-student
+-- school_year is NO LONGER an eligibility input. Canonical eligibility =
+-- explicit tri-state override -> Hebrew-cohort default (youngest current
+-- cohort excluded). Override coverage: supabase/tests/override_and_audit_tests.sql
 
 -- ============================================================================
 -- E0: role + schema sanity
@@ -83,11 +89,17 @@ begin
     raise exception 'FAIL: non-work day resolved as expected';
   end if;
 
-  -- year-א student: not employment-eligible
-  if public.student_employment_eligible('44444444-4444-4444-4444-44444444440d') then
-    raise exception 'FAIL: year-א student marked eligible';
+  -- COHORT eligibility (migration 20260923000001/2): the Hebrew-letter cohort
+  -- order replaces the old per-student school_year contract. Seeded cohorts:
+  --   זית=ז(7) שקד=ש(21)=YOUNGEST רימון=ר(20) דקל=ד(4)=OLDEST
+  -- → a דקל student (40d) IS eligible; a שקד student (406) is NOT.
+  if not public.student_employment_eligible('44444444-4444-4444-4444-44444444440d') then
+    raise exception 'FAIL: oldest-cohort (דקל) student marked ineligible';
   end if;
-  raise notice 'PASS: weekly resolver + non-work day + eligibility';
+  if public.student_employment_eligible('44444444-4444-4444-4444-444444444406') then
+    raise exception 'FAIL: youngest-cohort (שקד) student marked eligible';
+  end if;
+  raise notice 'PASS: weekly resolver + non-work day + cohort eligibility';
 end $$;
 
 -- ============================================================================
@@ -172,10 +184,10 @@ begin
     raise exception 'FAIL: slots not saved';
   end if;
 
-  -- ineligible student rejected
+  -- youngest-cohort (שקד) student rejected by the canonical eligibility rule
   begin
     perform public.admin_upsert_employment_placement(
-      null, '44444444-4444-4444-4444-44444444440d', 'לא רלוונטי', null, null,
+      null, '44444444-4444-4444-4444-444444444406', 'לא רלוונטי', null, null,
       current_date, null, null, '[]'::jsonb);
     raise exception 'FAIL: ineligible student placed';
   exception when check_violation then null; end;
@@ -264,6 +276,8 @@ rollback;
 -- ============================================================================
 -- E5: 200-hour progress buckets (0 / partial / exactly 200 / above 200)
 -- ============================================================================
+begin;
+select pg_temp.claim_as('itay@chamama.example', '11111111-1111-1111-1111-111111111105');
 do $$ declare
   v_noam int; v_tamar int; v_gili int; v_opaz int;
 begin
@@ -285,29 +299,40 @@ begin
     raise exception 'FAIL: zero bucket wrong: %', v_opaz;
   end if;
 
-  -- progress filter (5th arg = p_progress) in the management rows RPC
-  if (select count(*) from public.employment_admin_rows(null, null, null, null, 'at')
+  -- progress filter (4th arg = p_progress) in the management rows RPC.
+  -- The exactly-200h student (405) is in the YOUNGEST cohort (שקד) and only
+  -- appears once force-eligible through the tri-state override — which also
+  -- composes the override with the admin rows.
+  perform public.admin_set_employment_override(
+    '44444444-4444-4444-4444-444444444405', 'eligible');
+  if (select count(*) from public.employment_admin_rows(null, null, null, 'at')
       where student_id = '44444444-4444-4444-4444-444444444405') <> 1 then
     raise exception 'FAIL: at-200 filter wrong';
   end if;
-  if (select count(*) from public.employment_admin_rows(null, null, null, null, 'above')
+  if (select count(*) from public.employment_admin_rows(null, null, null, 'above')
       where student_id = '44444444-4444-4444-4444-444444444409') <> 1 then
     raise exception 'FAIL: above-200 filter wrong';
   end if;
-  if (select count(*) from public.employment_admin_rows(null, null, null, 'none', null)
+  if (select count(*) from public.employment_admin_rows(null, null, 'none', null)
       where student_id = '44444444-4444-4444-4444-444444444402') <> 1 then
     raise exception 'FAIL: no-placement filter wrong';
   end if;
+  -- only EFFECTIVELY-eligible students are listed: with the override removed,
+  -- the youngest cohort (שקד) disappears again
+  perform public.admin_set_employment_override(
+    '44444444-4444-4444-4444-444444444405', 'automatic');
   if exists (
-    select 1 from public.employment_admin_rows(null, null, null, null, null)
-     where school_year = 1
+    select 1 from public.employment_admin_rows(null, null, null, null)
+     where student_id in ('44444444-4444-4444-4444-444444444405',
+                          '44444444-4444-4444-4444-444444444406',
+                          '44444444-4444-4444-4444-444444444407',
+                          '44444444-4444-4444-4444-444444444408')
   ) then
-    raise exception 'FAIL: year-א student present in employment rows';
+    raise exception 'FAIL: youngest-cohort (שקד) student present in employment rows';
   end if;
-  -- NULL-year students are intentionally SURFACED (see E12), so only year-א
-  -- and explicit non-2..4 years are forbidden here.
-  raise notice 'PASS: 200h progress buckets (0 / partial / exact / above) + filters';
+  raise notice 'PASS: 200h progress buckets (0 / partial / exact / above) + filters + override composition';
 end $$;
+rollback;
 
 -- ============================================================================
 -- E6: unified student schedule — employment present, ordering kept
@@ -544,128 +569,36 @@ end $$;
 rollback;
 
 -- ============================================================================
--- E12: missing-year surfacing + explicit year assignment (pre-deploy check)
---   - NULL-year students are RETURNED by employment_admin_rows (never hidden)
---   - year-א students remain excluded
---   - p_year = 0 filters "year not set"
---   - leadership/super_admin can set/clear the year (audited); coordinator
---     and plain staff cannot
+-- E12 (REWRITTEN for the cohort contract): the old school-year eligibility
+-- (students.school_year + admin_set_student_school_year) is a REMOVED product
+-- contract — the canonical rule is now override -> Hebrew-cohort default
+-- (migration 20260923000002). The school-year RPC blocks below were deleted;
+-- per-student override behavior (force eligible / force ineligible / reset +
+-- authorization + audit) is covered by supabase/tests/override_and_audit_tests.sql.
+-- What still matters HERE: the management rows list only effectively-eligible
+-- students, and cohort-eligible students with legacy NULL school_year data
+-- remain visible (school_year is no longer an eligibility input at all).
 -- ============================================================================
 do $$ declare
   v_cnt int;
 begin
-  -- תהל מוסקל (40e) is seeded with school_year NULL: must appear, flagged by NULL year
-  select count(*) into v_cnt from public.employment_admin_rows(null, null, null, null, null)
-   where student_id = '44444444-4444-4444-4444-44444444440e' and school_year is null;
+  -- תהל מוסקל (40e, דקל = oldest cohort) must appear — her NULL school_year
+  -- is irrelevant under the cohort rule
+  select count(*) into v_cnt from public.employment_admin_rows(null, null, null, null)
+   where student_id = '44444444-4444-4444-4444-44444444440e';
   if v_cnt <> 1 then
-    raise exception 'FAIL: NULL-year student hidden from employment rows';
+    raise exception 'FAIL: cohort-eligible student with NULL school_year hidden';
   end if;
 
-  -- year-א student (40d) remains excluded
+  -- youngest cohort (שקד) remains excluded
   if exists (
-    select 1 from public.employment_admin_rows(null, null, null, null, null)
-     where student_id = '44444444-4444-4444-4444-44444444440d'
+    select 1 from public.employment_admin_rows(null, null, null, null)
+     where student_id = '44444444-4444-4444-4444-444444444405'
   ) then
-    raise exception 'FAIL: year-א student present in employment rows';
+    raise exception 'FAIL: youngest-cohort student present in employment rows';
   end if;
 
-  -- p_year = 0 → exactly the not-set students
-  select count(*) into v_cnt from public.employment_admin_rows(null, 0::smallint, null, null, null)
-   where school_year is not null;
-  if v_cnt <> 0 then
-    raise exception 'FAIL: p_year=0 filter leaks years';
-  end if;
-  if (select count(*) from public.employment_admin_rows(null, 0::smallint, null, null, null)
-      where student_id = '44444444-4444-4444-4444-44444444440e') <> 1 then
-    raise exception 'FAIL: p_year=0 filter misses the NULL-year student';
-  end if;
-
-  -- NULL-year student is NOT eligible for placement until the year is set
-  if public.student_employment_eligible('44444444-4444-4444-4444-44444444440e') then
-    raise exception 'FAIL: NULL-year student treated as eligible';
-  end if;
-
-  raise notice 'PASS: NULL-year students surfaced (never hidden), year-א excluded, not-set filter';
+  raise notice 'PASS: management rows serve effectively-eligible students only (NULL-year data irrelevant)';
 end $$;
-
-begin;
-select pg_temp.claim_as('liat@chamama.example', '11111111-1111-1111-1111-111111111109');
-do $$ begin
-  -- leadership sets the year → student becomes eligible
-  perform public.admin_set_student_school_year(
-    '44444444-4444-4444-4444-44444444440e', 2::smallint);
-  if not public.student_employment_eligible('44444444-4444-4444-4444-44444444440e') then
-    raise exception 'FAIL: year set but student still not eligible';
-  end if;
-  -- clear again → back to not-eligible
-  perform public.admin_set_student_school_year(
-    '44444444-4444-4444-4444-44444444440e', null);
-  if public.student_employment_eligible('44444444-4444-4444-4444-44444444440e') then
-    raise exception 'FAIL: cleared year still eligible';
-  end if;
-  raise notice 'PASS: leadership sets and clears the school year';
-end $$;
-rollback;
-
-begin;
-select pg_temp.claim_as('itay@chamama.example', '11111111-1111-1111-1111-111111111105');
-do $$ begin
-  begin
-    perform public.admin_set_student_school_year(
-      '44444444-4444-4444-4444-44444444440e', 2::smallint);
-    raise exception 'FAIL: coordinator set a school year';
-  exception when insufficient_privilege then null; end;
-  raise notice 'PASS: coordinator cannot set school years';
-end $$;
-rollback;
-
-begin;
-select pg_temp.claim_as('tom@chamama.example', '11111111-1111-1111-1111-11111111110a');
-do $$ begin
-  begin
-    perform public.admin_set_student_school_year(
-      '44444444-4444-4444-4444-44444444440e', 2::smallint);
-    raise exception 'FAIL: plain staff set a school year';
-  exception when insufficient_privilege then null; end;
-  raise notice 'PASS: plain staff cannot set school years';
-end $$;
-rollback;
-
-begin;
-select pg_temp.claim_as('ronen@chamama.example', '11111111-1111-1111-1111-111111111101');
-do $$ begin
-  begin
-    perform public.admin_set_student_school_year(
-      '44444444-4444-4444-4444-44444444440e', 5::smallint);
-    raise exception 'FAIL: invalid year accepted';
-  exception when check_violation then null;
-  when others then
-    if sqlerrm not like '%שנת לימודים לא תקינה%' and sqlerrm not like '%check%' then
-      raise exception 'FAIL: unexpected error: %', sqlerrm;
-    end if;
-  end;
-  raise notice 'PASS: invalid year rejected';
-end $$;
-rollback;
-
--- year assignment audited
-begin;
-select pg_temp.claim_as('liat@chamama.example', '11111111-1111-1111-1111-111111111109');
-do $$ begin
-  perform public.admin_set_student_school_year('44444444-4444-4444-4444-44444444440e', 3::smallint);
-end $$;
-select set_config('role', 'postgres', true);
-do $$ begin
-  if not exists (
-    select 1 from public.audit_logs
-     where action = 'student_school_year_set'
-       and entity_id = '44444444-4444-4444-4444-44444444440e'
-       and metadata ->> 'school_year' = '3'
-  ) then
-    raise exception 'FAIL: school-year assignment not audited';
-  end if;
-  raise notice 'PASS: school-year assignment audited';
-end $$;
-rollback;
 
 \echo '--- employment test suite finished (no FAIL above = clean) ---'

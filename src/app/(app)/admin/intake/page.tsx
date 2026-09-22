@@ -6,7 +6,7 @@ import IntakeManager, {
   type IntakeWindowRow,
 } from "@/components/admin/IntakeManager";
 
-export const metadata = { title: "ניהול · קבלת פרויקטים" };
+export const metadata = { title: "ניהול · הצהרת כוונות" };
 
 export default async function AdminIntakePage() {
   const me = await requireMe();

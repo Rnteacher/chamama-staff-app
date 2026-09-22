@@ -53,7 +53,9 @@ test.describe("desktop annual calendar", () => {
   test.skip(({ viewport }) => (viewport?.width ?? 0) < 1024, "desktop-only view");
 
   test("renders the 12-month school-year overview with events", async ({ page }) => {
-    await loginAndGoTo(page, USERS.staff, "/calendar");
+    // the management calendar is leadership/super_admin-only (calendar-access
+    // spec asserts ordinary staff are denied) — view here as leadership
+    await loginAndGoTo(page, USERS.admin, "/calendar");
 
     // 12 month mini-grids
     await expect(page.locator("section[aria-label^='ספטמבר']")).toBeVisible();
@@ -64,15 +66,14 @@ test.describe("desktop annual calendar", () => {
     // today is highlighted and current
     await expect(page.locator(`[aria-current="date"]`)).toBeVisible();
 
-    // seeded event appears on its day detail (today: יום ספורט 09:00–13:00)
+    // seeded event appears; clicking it opens the event dialog
     await page.locator("section[aria-label='פירוט יום']").getByText("יום ספורט").click();
-    // read-only viewer: no editor form, details dialog instead
     await expect(page.getByRole("dialog")).toBeVisible();
     await page.getByRole("button", { name: "סגירה" }).click();
   });
 
   test("clicking a date zooms into that day", async ({ page }) => {
-    await loginAndGoTo(page, USERS.staff, "/calendar");
+    await loginAndGoTo(page, USERS.admin, "/calendar");
     const today = jerusalemTodayISO();
     const tomorrow = addDaysISO(today, 1);
     // click tomorrow's cell in any month card
@@ -159,7 +160,8 @@ test.describe("mobile calendar + home", () => {
   test.skip(({ viewport }) => (viewport?.width ?? 0) >= 1024, "mobile-only view");
 
   test("mobile shows compact agenda instead of the 12-month grid", async ({ page }) => {
-    await loginAndGoTo(page, USERS.staff, "/calendar");
+    // management calendar: leadership/super_admin only
+    await loginAndGoTo(page, USERS.admin, "/calendar");
     // year grid hidden on mobile; agenda visible
     await expect(page.locator("section[aria-label='אירועים קרובים']")).toBeVisible();
     await expect(page.getByText("יום ספורט").first()).toBeVisible();
@@ -171,7 +173,9 @@ test.describe("mobile calendar + home", () => {
   test("mobile home shows היום שלי and קבוצות למידה היום", async ({ page }) => {
     await loginAndGoTo(page, USERS.mentor, "/");
     await expect(page.getByRole("heading", { name: "היום שלי" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "קבוצות למידה היום" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "קבוצות למידה היום", exact: true })
+    ).toBeVisible();
 
     // מיכל leads קבוצת צילום; on Mondays the schedule shows it
     const dow = new Date().getDay(); // JS weekday; the server seeds make this deterministic on Mondays

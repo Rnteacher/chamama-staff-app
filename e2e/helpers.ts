@@ -54,36 +54,53 @@ export async function requireEmailAuth(page: Page): Promise<void> {
 }
 
 /**
- * Per-worker session cache: the first login for a user performs the form
- * flow and stores the auth cookies; every subsequent login in the same
- * worker replays them instead of hammering the local auth endpoint's
- * password-grant rate limits (the suite signs in many accounts back-to-back).
+ * Per-worker session cache. The FIRST login for a user performs the form
+ * flow; every later login replays the cached Supabase auth cookies instead
+ * of hitting the local auth endpoint's password-grant rate limits (the suite
+ * signs in many accounts back-to-back).
+ *
+ * Only `sb-*` auth cookies are cached — app cookies (View-As, etc.) must
+ * never leak into a replayed session. A replay whose session was revoked
+ * server-side (a real sign-out) self-heals: the flow falls through to a
+ * fresh form login.
  */
 const sessionCookies = new Map<string, Cookie[]>();
+
+function authCookiesOnly(cookies: Cookie[]): Cookie[] {
+  return cookies.filter((c) => c.name.startsWith("sb-"));
+}
 
 export async function login(page: Page, user: { email: string; password: string }) {
   await requireEmailAuth(page);
   const cached = sessionCookies.get(user.email);
   if (cached && cached.length > 0) {
+    await page.context().clearCookies();
     await page.context().addCookies(cached);
     await page.goto("/");
-    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-    return;
+    if (!page.url().includes("/login")) {
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      return;
+    }
+    // cached session was revoked server-side — fall through to a fresh login
   }
+  await page.context().clearCookies();
   await page.goto("/login");
   await page.getByText("כניסה לבדיקות באמצעות אימייל").click();
   await page.getByLabel("אימייל").fill(user.email);
   await page.getByLabel("סיסמה").fill(user.password);
   await page.getByRole("button", { name: "כניסה", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 20_000 });
-  sessionCookies.set(user.email, await page.context().cookies());
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  sessionCookies.set(user.email, authCookiesOnly(await page.context().cookies()));
 }
 
+/**
+ * Real sign-out through the app's own UI (this exercises the sign-out
+ * server action and the /login redirect). The session cache is NOT cleared:
+ * login() self-heals over a revoked cached session, so no extra password
+ * grants are burned.
+ */
 export async function logout(page: Page) {
-  // signing out revokes the session server-side — drop any cached cookies
-  // so the next login performs a fresh form flow
-  sessionCookies.clear();
   await page.goto("/settings");
   await page.getByRole("button", { name: "התנתקות" }).click();
   await expect(page).toHaveURL(/\/login/);

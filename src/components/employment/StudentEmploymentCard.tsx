@@ -5,18 +5,23 @@ import {
   formatWorkSlotsHe,
   type EmploymentOverviewData,
 } from "@/lib/employment";
+import EmploymentOverrideControl from "@/components/employment/EmploymentOverrideControl";
 
 /**
  * Employment summary on the student page: workplace, planned work days,
  * accumulated hours toward the 200h target and recent work logs.
  * Contact details are NOT rendered here (kept off broad surfaces).
+ * Authorized employment managers also get the tri-state eligibility
+ * override here — eligibility is operational logic, not a label.
  */
 export default function StudentEmploymentCard({
   data,
   studentId,
+  canManageOverride = false,
 }: {
   data: EmploymentOverviewData;
   studentId: string;
+  canManageOverride?: boolean;
 }) {
   const p = computeEmploymentProgress(data.total_minutes);
 
@@ -33,6 +38,13 @@ export default function StudentEmploymentCard({
           </Link>
         )}
       </div>
+
+      {canManageOverride && (
+        <EmploymentOverrideControl
+          studentId={studentId}
+          override={data.override ?? "automatic"}
+        />
+      )}
 
       {!data.eligible ? (
         <p className="mt-2 text-sm text-muted">

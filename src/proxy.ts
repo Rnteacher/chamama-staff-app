@@ -60,9 +60,26 @@ export async function proxy(request: NextRequest) {
     },
   });
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // The auth-server verification and the active-staff check are independent
+  // round trips to Supabase: run them concurrently. is_authorized_staff() is
+  // evaluated inside the database for auth.uid() of this same session token
+  // (a profile linked to the account AND active); its answer is only used
+  // once getUser() has verified that session. Without any auth cookie there
+  // is no session to check, so the second call is skipped.
+  const hasAuthCookie = request.cookies
+    .getAll()
+    .some((c) => c.name.startsWith("sb-"));
+  const [
+    {
+      data: { user },
+    },
+    staffCheck,
+  ] = await Promise.all([
+    supabase.auth.getUser(),
+    hasAuthCookie
+      ? supabase.rpc("is_authorized_staff")
+      : Promise.resolve({ data: false, error: null }),
+  ]);
 
   const { pathname } = request.nextUrl;
 
@@ -82,13 +99,9 @@ export async function proxy(request: NextRequest) {
   // Signed in: only claimed, active staff identities may proceed.
   // (The claim — linking auth_user_id to the staff record — happens in the
   // auth callback via the claim_staff_identity() RPC.)
-  const { data: staff } = await supabase
-    .from("profiles")
-    .select("id, is_active")
-    .eq("auth_user_id", user.id)
-    .maybeSingle();
+  const isActiveStaff = !staffCheck.error && staffCheck.data === true;
 
-  if (!staff?.is_active) {
+  if (!isActiveStaff) {
     if (pathname === "/access-denied") return response;
     return NextResponse.redirect(new URL("/access-denied", request.url));
   }

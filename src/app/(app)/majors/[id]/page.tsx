@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { requireMe } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import { getUnreadCounts } from "@/lib/unread";
 import StudentRow, { type StudentRowData } from "@/components/StudentRow";
 import EmptyState from "@/components/EmptyState";
 
@@ -9,11 +10,12 @@ export const metadata = { title: "מגמה" };
 export default async function MajorPage({
   params,
 }: PageProps<"/majors/[id]">) {
-  await requireMe();
-  const { id } = await params;
-  const supabase = await createClient();
+  const [{ id }, supabase] = await Promise.all([params, createClient()]);
 
-  const [majorRes, headsRes, studentsRes, countsRes] = await Promise.all([
+  // RLS-scoped reads start together with the shared identity check (one
+  // round trip); nothing is rendered before requireMe() has passed.
+  const [, majorRes, headsRes, studentsRes, unreadByStudent] = await Promise.all([
+    requireMe(),
     supabase.from("majors").select("id, name").eq("id", id).maybeSingle(),
     supabase.from("major_heads").select("profiles(id, full_name)").eq("major_id", id),
     supabase
@@ -22,16 +24,12 @@ export default async function MajorPage({
       .eq("major_id", id)
       .eq("is_archived", false)
       .order("first_name"),
-    supabase.rpc("student_unread_counts"),
+    getUnreadCounts(),
   ]);
 
   const major = majorRes.data;
   if (!major) notFound();
 
-  const unreadByStudent = new Map<string, number>();
-  for (const row of countsRes.data ?? []) {
-    unreadByStudent.set(row.student_id, Number(row.unread_count));
-  }
 
   const students: StudentRowData[] = (studentsRes.data ?? []).map((s) => {
     const row = s as unknown as {

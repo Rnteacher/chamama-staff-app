@@ -73,8 +73,7 @@ export default async function EmploymentDetailPage({
             {student.first_name} {student.last_name}
           </h1>
           <p className="mt-0.5 text-sm text-muted">
-            {student.greenhouse_groups?.name ?? "—"} ·{" "}
-            {overview.eligible ? "זכאי/ת לתוכנית התעסוקה" : "לא זכאי/ת (שנתון צעיר)"}
+            {student.greenhouse_groups?.name ?? "—"}
           </p>
         </div>
         <div className="flex items-center gap-3">

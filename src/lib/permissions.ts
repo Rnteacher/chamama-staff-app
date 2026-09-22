@@ -32,11 +32,38 @@ export const ALL_ROLES: Role[] = [
   "super_admin",
 ];
 
+/**
+ * Roles an administrator can manually assign. The implicit base "staff"
+ * identity is NOT selectable — being present in the staff directory already
+ * means the person is staff; mentor/master/major-head are additionally
+ * derived from the canonical relationship tables (group_mentors,
+ * master_assignments, major_heads), not from this list.
+ */
+export const SELECTABLE_ROLES: Role[] = ALL_ROLES.filter((r) => r !== "staff");
+
 export const PRIVILEGED_ROLES: readonly Role[] = [
   "counselor",
   "project_coordinator",
   "leadership",
 ] as const;
+
+/**
+ * Roles that genuinely own at least ONE management area (canonical mirror of
+ * the /admin shell guard): super_admin (everything), project_coordinator
+ * (הצהרת כוונות), employment_coordinator / leadership (תעסוקה).
+ * "staff" is NOT a management capability — being on staff grants nothing.
+ * Each management sub-route keeps enforcing its own narrower authorization.
+ */
+export const MANAGEMENT_ROLES: readonly Role[] = [
+  "super_admin",
+  "project_coordinator",
+  "employment_coordinator",
+  "leadership",
+];
+
+export function canAccessManagement(roles: readonly Role[]): boolean {
+  return roles.some((r) => (MANAGEMENT_ROLES as readonly string[]).includes(r));
+}
 
 export interface PermissionContext {
   roles: Role[];

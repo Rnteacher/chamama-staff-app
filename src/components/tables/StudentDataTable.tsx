@@ -76,7 +76,7 @@ const ALL_COLUMNS: Record<string, ColumnDef> = {
   student_name: {
     key: "student_name", label: "חניך/ה", sortable: true,
     sortValue: (r) => r.student_name,
-    render: (r) => <Link href={`/students/${r.student_id}`} className="font-bold hover:underline">{r.student_name}</Link>,
+    render: (r) => <Link href={`/students/${r.student_id}`} prefetch={false} className="font-bold hover:underline">{r.student_name}</Link>,
   },
   group_name: {
     key: "group_name", label: "קבוצה", sortable: true,

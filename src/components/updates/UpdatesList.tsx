@@ -70,7 +70,7 @@ export default function UpdatesList({ items }: { items: UpdateItem[] }) {
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-xl font-extrabold">עדכונים שלא נקראו</h1>
+        <h1 className="text-xl font-extrabold">עדכונים</h1>
         {unreadCount > 0 && (
           <button
             type="button"
@@ -131,7 +131,7 @@ export default function UpdatesList({ items }: { items: UpdateItem[] }) {
                     <span aria-hidden="true" className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-dark" />
                   )}
                   <Link
-                    href={`/students/${row.student_id}?m=${row.message_id}`}
+                    href={`/students/${row.student_id}?m=${row.message_id}`} prefetch={false}
                     className="min-w-0 flex-1"
                   >
                     <span className="block font-bold">

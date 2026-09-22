@@ -283,7 +283,7 @@ type ResolvedAudience = {
 const TYPE_LABELS: Record<ResolvedAudience["type"], string> = {
   everyone: "כולם",
   staff_only: "צוות בלבד",
-  home_group: "קבוצת אם",
+  home_group: "קבוצה",
   major: "מגמה",
   learning_group: "קבוצת למידה",
   staff_member: "איש צוות",

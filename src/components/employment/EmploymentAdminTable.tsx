@@ -8,10 +8,6 @@ export interface EmploymentRow {
   studentId: string;
   studentName: string;
   groupName: string | null;
-  /** canonical cohort eligibility (youngest active cohort = false) */
-  employmentEligible: boolean;
-  /** youngest-cohort note or invalid-group-name warning */
-  cohortNote: string | null;
   placementId: string | null;
   workplaceName: string | null;
   placementActive: boolean | null;
@@ -26,9 +22,9 @@ type StatusFilter = "all" | "active" | "ended" | "none";
 /**
  * Employment management table — desktop-wide (not a narrow card), with a
  * compact mobile list. Filters: group / workplace / status / progress.
- * Eligibility is DERIVED from the home-group cohort order (canonical SQL) —
- * no per-student year is required or shown. The youngest active cohort is
- * surfaced with a note, not hidden.
+ * Eligibility is canonical server logic: this screen lists ONLY
+ * effectively-eligible students, so no eligibility column/labels are needed
+ * here — the (rare) per-student decision lives on the student page.
  */
 export default function EmploymentAdminTable({
   rows,
@@ -85,7 +81,7 @@ export default function EmploymentAdminTable({
           />
         </label>
         <label className="text-xs font-semibold">
-          קבוצת אם
+          קבוצה
           <select
             value={group}
             onChange={(e) => setGroup(e.target.value)}
@@ -141,8 +137,7 @@ export default function EmploymentAdminTable({
           <thead>
             <tr className="border-b border-line text-right text-xs text-muted">
               <th className="px-3 py-2.5 font-bold">חניך/ה</th>
-              <th className="px-3 py-2.5 font-bold">קבוצת אם</th>
-              <th className="px-3 py-2.5 font-bold">זכאות</th>
+              <th className="px-3 py-2.5 font-bold">קבוצה</th>
               <th className="px-3 py-2.5 font-bold">מקום עבודה</th>
               <th className="px-3 py-2.5 font-bold">ימי עבודה</th>
               <th className="px-3 py-2.5 font-bold">שעות שנצברו</th>
@@ -153,7 +148,7 @@ export default function EmploymentAdminTable({
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-3 py-6 text-center text-muted">
+                <td colSpan={7} className="px-3 py-6 text-center text-muted">
                   לא נמצאו חניכים מתאימים.
                 </td>
               </tr>
@@ -164,30 +159,11 @@ export default function EmploymentAdminTable({
                   <Fragment key={r.studentId}>
                   <tr className="border-b border-line/50 last:border-0">
                     <td className="px-3 py-2.5 font-bold">
-                      <Link href={`/admin/employment/${r.studentId}`} className="hover:underline">
+                      <Link href={`/admin/employment/${r.studentId}`} prefetch={false} className="hover:underline">
                         {r.studentName}
                       </Link>
                     </td>
                     <td className="px-3 py-2.5 text-muted">{r.groupName ?? "—"}</td>
-                    <td className="px-3 py-2.5">
-                      {r.cohortNote ? (
-                        <span
-                          data-cohort-note="true"
-                          className="inline-block rounded-full border border-line bg-bg px-2 py-0.5 text-xs font-bold text-muted"
-                          title={r.cohortNote}
-                        >
-                          {r.employmentEligible ? "כן · לתשומת לב" : "לא · שנתון צעיר"}
-                        </span>
-                      ) : r.employmentEligible ? (
-                        <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs font-bold text-emerald-900">
-                          כן
-                        </span>
-                      ) : (
-                        <span className="rounded-full border border-line bg-bg px-2 py-0.5 text-xs font-bold text-muted">
-                          לא
-                        </span>
-                      )}
-                    </td>
                     <td className="px-3 py-2.5">
                       {r.workplaceName ?? <span className="text-muted">—</span>}
                     </td>
@@ -240,18 +216,12 @@ export default function EmploymentAdminTable({
             return (
               <li key={r.studentId}>
                 <Link
-                  href={`/admin/employment/${r.studentId}`}
+                  href={`/admin/employment/${r.studentId}`} prefetch={false}
                   className="flex min-h-[64px] flex-col gap-1 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40"
                 >
                   <span className="flex items-center justify-between gap-2">
                     <span className="font-bold">{r.studentName}</span>
-                    <span className="text-xs text-muted">
-                      <span className={r.employmentEligible ? "font-bold" : "font-bold text-warn"}>
-                        {r.employmentEligible ? "זכאי/ת" : "שנתון צעיר"}
-                      </span>
-                      {" · "}
-                      {r.groupName ?? "—"}
-                    </span>
+                    <span className="text-xs text-muted">{r.groupName ?? "—"}</span>
                   </span>
                   <span className="text-sm">{r.workplaceName ?? "ללא שיבוץ"}</span>
                   <span className="flex items-center gap-2">

@@ -3,16 +3,24 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const items = [
-  { href: "/", label: "בית", icon: HomeIcon },
-  { href: "/search", label: "חיפוש", icon: SearchIcon },
-  { href: "/updates", label: "עדכונים", icon: BellIcon, badge: true },
-  { href: "/groups", label: "קבוצות", icon: UsersIcon },
-  { href: "/settings", label: "עוד", icon: MoreIcon },
-];
-
-export default function BottomNav({ totalUnread }: { totalUnread: number }) {
+export default function BottomNav({
+  totalUnread,
+  showCalendar,
+}: {
+  totalUnread: number;
+  showCalendar: boolean;
+}) {
   const pathname = usePathname();
+
+  const items = [
+    { href: "/", label: "בית", icon: HomeIcon, badge: false },
+    { href: "/updates", label: "עדכונים", icon: BellIcon, badge: true },
+    ...(showCalendar
+      ? [{ href: "/calendar", label: "לוח שנה", icon: CalendarIcon, badge: false }]
+      : []),
+    { href: "/groups", label: "קבוצות", icon: UsersIcon, badge: false },
+    { href: "/settings", label: "הגדרות", icon: SettingsIcon, badge: false },
+  ];
 
   function isActive(href: string): boolean {
     if (href === "/") return pathname === "/";
@@ -25,7 +33,10 @@ export default function BottomNav({ totalUnread }: { totalUnread: number }) {
       className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 backdrop-blur"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
-      <ul className="mx-auto grid max-w-3xl grid-cols-5">
+      <ul
+        className="mx-auto grid max-w-3xl"
+        style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}
+      >
         {items.map((item) => {
           const active = isActive(item.href);
           const badge = item.badge && totalUnread > 0;
@@ -74,20 +85,20 @@ function HomeIcon({ active }: { active: boolean }) {
   );
 }
 
-function SearchIcon({ active }: { active: boolean }) {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.4 : 1.8} aria-hidden="true">
-      <circle cx="11" cy="11" r="7" />
-      <path d="m20 20-3.5-3.5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function BellIcon({ active }: { active: boolean }) {
   return (
     <svg width="22" height="22" viewBox="0 0 24 24" fill={active ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
       <path d="M6 9a6 6 0 1 1 12 0c0 4 1.5 5.5 2 6H4c.5-.5 2-2 2-6Z" strokeLinejoin="round" />
       <path d="M10 19a2 2 0 0 0 4 0" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CalendarIcon({ active }: { active: boolean }) {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill={active ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <rect x="3.5" y="5" width="17" height="15.5" rx="2.5" />
+      <path d="M3.5 9.5h17M8 2.8V6M16 2.8V6" strokeLinecap="round" />
     </svg>
   );
 }
@@ -102,12 +113,14 @@ function UsersIcon({ active }: { active: boolean }) {
   );
 }
 
-function MoreIcon({ active }: { active: boolean }) {
+function SettingsIcon({ active }: { active: boolean }) {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill={active ? "currentColor" : "none"} stroke="currentColor" strokeWidth={active ? 2.4 : 1.8} aria-hidden="true">
-      <circle cx="5" cy="12" r="1.6" />
-      <circle cx="12" cy="12" r="1.6" />
-      <circle cx="19" cy="12" r="1.6" />
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.4 : 1.8} aria-hidden="true">
+      <circle cx="12" cy="12" r="3.2" />
+      <path
+        d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.5-2-3.4-2.3 1a7.7 7.7 0 0 0-2.6-1.5L14 2.6h-4l-.5 2.5A7.7 7.7 0 0 0 6.9 6.6l-2.3-1-2 3.4 2 1.5a7.6 7.6 0 0 0 0 3l-2 1.5 2 3.4 2.3-1a7.7 7.7 0 0 0 2.6 1.5l.5 2.5h4l.5-2.5a7.7 7.7 0 0 0 2.6-1.5l2.3 1 2-3.4Z"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

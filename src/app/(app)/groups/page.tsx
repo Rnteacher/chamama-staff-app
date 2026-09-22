@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireMe } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import { getUnreadCounts } from "@/lib/unread";
 import EmptyState from "@/components/EmptyState";
 import { formatWeeklySlotsHe, normalizeTime, type WeeklySlot } from "@/lib/schedule";
 
@@ -18,20 +19,23 @@ interface LearningGroupRow {
 }
 
 export default async function GroupsPage() {
-  await requireMe();
   const supabase = await createClient();
 
+  // RLS-scoped reads start together with the shared identity check (one
+  // round trip); nothing is rendered before requireMe() has passed.
   const [
+    ,
     groupsRes,
     studentsRes,
     mentorsRes,
-    countsRes,
+    unreadByStudent,
     lgRes,
     lgSlotsRes,
     lgStaffRes,
     lgStudentRes,
     lgMembersRes,
   ] = await Promise.all([
+    requireMe(),
     supabase.from("greenhouse_groups").select("id, name").order("name"),
     supabase
       .from("students")
@@ -40,7 +44,7 @@ export default async function GroupsPage() {
     supabase
       .from("group_mentors")
       .select("group_id, profiles(full_name)"),
-    supabase.rpc("student_unread_counts"),
+    getUnreadCounts(),
     supabase
       .from("learning_groups")
       .select("id, name, description, is_active")
@@ -59,11 +63,6 @@ export default async function GroupsPage() {
       .select("learning_group_id")
       .is("ended_at", null),
   ]);
-
-  const unreadByStudent = new Map<string, number>();
-  for (const row of countsRes.data ?? []) {
-    unreadByStudent.set(row.student_id, Number(row.unread_count));
-  }
 
   const unreadByGroup = new Map<string, number>();
   for (const s of studentsRes.data ?? []) {
@@ -161,10 +160,10 @@ export default async function GroupsPage() {
 
   return (
     <div className="flex flex-col gap-8">
-      {/* ------------------------------------------------ קבוצות אם ------- */}
+      {/* ------------------------------------------------- קבוצות --------- */}
       <section aria-labelledby="greenhouse-groups-heading" className="flex flex-col gap-4">
         <h1 id="greenhouse-groups-heading" className="text-xl font-extrabold">
-          קבוצות אם
+          קבוצות
         </h1>
         {groups.length === 0 ? (
           <EmptyState title="אין קבוצות" description="טרם הוגדרו קבוצות במערכת." />
@@ -176,7 +175,7 @@ export default async function GroupsPage() {
               return (
                 <li key={g.id}>
                   <Link
-                    href={`/groups/${g.id}`}
+                    href={`/groups/${g.id}`} prefetch={false}
                     className="flex min-h-[68px] items-center gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40"
                   >
                     <span className="min-w-0 flex-1">
@@ -207,16 +206,13 @@ export default async function GroupsPage() {
           קבוצות למידה
         </h2>
         {learningGroups.length === 0 ? (
-          <EmptyState
-            title="אין קבוצות למידה"
-            description="טרם הוגדרו קבוצות למידה. הנהלה יכולה להוסיף באזור הניהול."
-          />
+          <EmptyState title="טרם הוגדרו קבוצות למידה" />
         ) : (
           <ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2">
             {learningGroups.map((g) => (
               <li key={g.id}>
                 <Link
-                  href={`/groups/learning/${g.id}`}
+                  href={`/groups/learning/${g.id}`} prefetch={false}
                   className={`flex min-h-[68px] items-center gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40 ${
                     g.is_active ? "" : "opacity-60"
                   }`}

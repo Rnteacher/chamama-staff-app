@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { requireMe } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import { getUnreadCounts } from "@/lib/unread";
 import StudentRow, { type StudentRowData } from "@/components/StudentRow";
 import EmptyState from "@/components/EmptyState";
 
@@ -9,11 +10,12 @@ export const metadata = { title: "קבוצה" };
 export default async function GroupPage({
   params,
 }: PageProps<"/groups/[id]">) {
-  await requireMe();
-  const { id } = await params;
-  const supabase = await createClient();
+  const [{ id }, supabase] = await Promise.all([params, createClient()]);
 
-  const [groupRes, mentorsRes, studentsRes, countsRes] = await Promise.all([
+  // RLS-scoped reads start together with the shared identity check (one
+  // round trip); nothing is rendered before requireMe() has passed.
+  const [, groupRes, mentorsRes, studentsRes, unreadByStudent] = await Promise.all([
+    requireMe(),
     supabase.from("greenhouse_groups").select("id, name").eq("id", id).maybeSingle(),
     supabase
       .from("group_mentors")
@@ -25,16 +27,12 @@ export default async function GroupPage({
       .eq("group_id", id)
       .eq("is_archived", false)
       .order("first_name"),
-    supabase.rpc("student_unread_counts"),
+    getUnreadCounts(),
   ]);
 
   const group = groupRes.data;
   if (!group) notFound();
 
-  const unreadByStudent = new Map<string, number>();
-  for (const row of countsRes.data ?? []) {
-    unreadByStudent.set(row.student_id, Number(row.unread_count));
-  }
 
   const students: StudentRowData[] = (studentsRes.data ?? []).map((s) => {
     const row = s as unknown as {

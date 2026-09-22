@@ -88,13 +88,13 @@ export default async function AttendanceOverviewPage({
       </header>
 
       {rows.length === 0 ? (
-        <EmptyState title="אין קבוצות" description="טרם הוגדרו קבוצות אם." />
+        <EmptyState title="אין קבוצות" description="טרם הוגדרו קבוצות." />
       ) : (
         <div className="overflow-x-auto rounded-2xl border border-line bg-surface">
           <table className="w-full min-w-[760px] text-sm">
             <thead>
               <tr className="border-b border-line text-right text-xs text-muted">
-                <th className="px-4 py-3 font-bold">קבוצת אם</th>
+                <th className="px-4 py-3 font-bold">קבוצה</th>
                 <th className="px-4 py-3 font-bold">סה״כ</th>
                 <th className="px-4 py-3 font-bold">דווחו</th>
                 <th className="px-4 py-3 font-bold">נוכחים</th>
@@ -118,7 +118,7 @@ export default async function AttendanceOverviewPage({
                   <td className="px-4 py-3 text-muted">{r.unresolved}</td>
                   <td className="px-4 py-3">
                     <Link
-                      href={`/attendance?group=${r.group_id}&date=${date}`}
+                      href={`/attendance?group=${r.group_id}&date=${date}`} prefetch={false}
                       className="rounded-full border border-line px-3 py-1 text-xs font-bold text-muted hover:bg-bg"
                     >
                       פתיחה ›

@@ -377,11 +377,12 @@ do $$ declare
   v_dow int := extract(dow from current_date);
   -- next Monday (v_dow=1) or the date itself if today is Monday
   v_monday date := v + ((1 - v_dow + 7) % 7);
+  -- the weekly seeded events (04 LG-audience / 05 staff-only) are anchored at
+  -- current_date + 7 and expand weekly from there — probe THAT day for events
+  v_probe date := current_date + 7;
   v_events int; v_meetings int; v_lgs int;
 begin
-  -- on Monday: מפגש צילום מורחב (LG leader audience) + weekly mentor meeting (seed)
-  select count(*) into v_events from public.staff_day_schedule('11111111-1111-1111-1111-111111111102', v_monday)
-   where source_type = 'calendar_event';
+  -- on Monday: weekly mentor meeting (seed) + the led learning group (צילום)
   select count(*) into v_meetings from public.staff_day_schedule('11111111-1111-1111-1111-111111111102', v_monday)
    where source_type = 'meeting';
   select count(*) into v_lgs from public.staff_day_schedule('11111111-1111-1111-1111-111111111102', v_monday)
@@ -393,8 +394,13 @@ begin
   if v_meetings < 1 then
     raise exception 'FAIL: staff schedule missing scheduled meeting (got %)', v_meetings;
   end if;
-  if v_events < 1 then
-    raise exception 'FAIL: staff schedule missing applicable event (got %)', v_events;
+
+  -- on the weekly events' anchor day: מפגש צילום מורחב (LG leader audience)
+  -- and ישיבת צוות שבועית (staff) both occur
+  select count(*) into v_events from public.staff_day_schedule('11111111-1111-1111-1111-111111111102', v_probe)
+   where source_type = 'calendar_event';
+  if v_events < 2 then
+    raise exception 'FAIL: staff schedule missing applicable events (got %)', v_events;
   end if;
 
   -- unrelated event absent: מיכל is not a specific-staff target of event 09
@@ -431,9 +437,12 @@ rollback;
 -- ============================================================================
 do $$ declare
   v_monday date := current_date + ((1 - extract(dow from current_date)::int + 7) % 7);
+  -- the weekly staff-only event is anchored at current_date + 7 — probe THAT
+  -- day for the leak check (it must never reach the student)
+  v_probe date := current_date + 7;
   v_events int; v_meetings int; v_lgs int;
 begin
-  select count(*) into v_events from public.student_day_schedule('44444444-4444-4444-4444-444444444401', v_monday)
+  select count(*) into v_events from public.student_day_schedule('44444444-4444-4444-4444-444444444401', current_date)
    where source_type = 'calendar_event';
   select count(*) into v_meetings from public.student_day_schedule('44444444-4444-4444-4444-444444444401', v_monday)
    where source_type = 'meeting';
@@ -446,6 +455,7 @@ begin
   if v_meetings < 1 then
     raise exception 'FAIL: student schedule missing weekly meeting (got %)', v_meetings;
   end if;
+  -- יום ספורט (everyone) is anchored TODAY → the student must see an event
   if v_events < 1 then
     raise exception 'FAIL: student schedule missing applicable event (got %)', v_events;
   end if;
@@ -457,9 +467,9 @@ begin
   ) then
     raise exception 'FAIL: impossible row';
   end if;
-  -- staff-only event never reaches the student
+  -- staff-only event never reaches the student (on its real occurrence day)
   if exists (
-    select 1 from public.student_day_schedule('44444444-4444-4444-4444-444444444401', v_monday)
+    select 1 from public.student_day_schedule('44444444-4444-4444-4444-444444444401', v_probe)
      where title = 'ישיבת צוות שבועית'
   ) then
     raise exception 'FAIL: staff-only event leaked into student schedule';
@@ -503,10 +513,11 @@ begin
   end if;
 
   -- calendar event conflict: מפגש צילום מורחב (LG audience) 16:30–17:00 —
-  -- its weekly occurrences start at current_date+7, so probe next-next Monday
+  -- its weekly occurrences start at current_date+7, so probe two weeks out
+  -- (start + 7 — guaranteed to be an occurrence day regardless of weekday)
   if not exists (
     select 1 from public.check_student_meeting_conflicts(
-      '44444444-4444-4444-4444-444444444401', array[v_monday + 7], '16:30', 60)
+      '44444444-4444-4444-4444-444444444401', array[current_date + 14], '16:30', 60)
      where source_type = 'calendar_event'
   ) then
     raise exception 'FAIL: calendar-event conflict missing';

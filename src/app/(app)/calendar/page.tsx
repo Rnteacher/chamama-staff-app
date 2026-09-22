@@ -50,7 +50,7 @@ function schoolYearRange(today: { y: number; m: number }): {
 export default async function CalendarPage({
   searchParams,
 }: PageProps<"/calendar">) {
-  const me = await requireMe();
+  const [me, viewAs] = await Promise.all([requireMe(), getViewAsState()]);
   // SERVER-SIDE route security: full calendar management (views, add/edit/
   // delete/cancel, CSV import) is leadership/super_admin ONLY. Direct URL
   // access by ordinary staff is denied — not merely hidden from navigation.
@@ -60,7 +60,6 @@ export default async function CalendarPage({
   if (!hasRole(me, "leadership") && !hasRole(me, "super_admin")) {
     redirect("/access-denied");
   }
-  const viewAs = await getViewAsState();
   const supabase = await createClient();
 
   const params = await searchParams;
@@ -77,7 +76,14 @@ export default async function CalendarPage({
   const todayISO = isoDate(p.year, p.month, p.day);
   const range = schoolYearRange({ y: p.year, m: p.month });
 
-  const [occurrences, rawEvents, rawAudiences] = await Promise.all([
+  // canManage: leadership OR super_admin, never in View-As (read-only there)
+  const canManage =
+    !viewAs.active &&
+    me.staffId !== null &&
+    (hasRole(me, "leadership") || hasRole(me, "super_admin"));
+
+  // calendar data and (when managing) the editor pick-lists in ONE round trip
+  const [occurrences, rawEvents, rawAudiences, editorRes] = await Promise.all([
     fetchCalendarRange(supabase, range.from, range.to),
     supabase
       .from("calendar_events")
@@ -86,13 +92,22 @@ export default async function CalendarPage({
     supabase
       .from("calendar_event_audiences")
       .select("event_id, audience_type, greenhouse_group_id, major_id, learning_group_id, staff_id"),
+    canManage
+      ? Promise.all([
+          supabase.from("greenhouse_groups").select("id, name").order("name"),
+          supabase.from("majors").select("id, name").order("name"),
+          supabase
+            .from("learning_groups")
+            .select("id, name, is_active")
+            .order("name"),
+          supabase
+            .from("profiles")
+            .select("id, email, full_name, auth_user_id")
+            .eq("is_active", true)
+            .order("full_name"),
+        ])
+      : Promise.resolve(null),
   ]);
-
-  // canManage: leadership OR super_admin, never in View-As (read-only there)
-  const canManage =
-    !viewAs.active &&
-    me.staffId !== null &&
-    (hasRole(me, "leadership") || hasRole(me, "super_admin"));
 
   let editorData: {
     groups: { id: string; name: string }[];
@@ -101,20 +116,8 @@ export default async function CalendarPage({
     staff: MultiSelectOption[];
   } | null = null;
 
-  if (canManage) {
-    const [groupsRes, majorsRes, lgRes, staffRes] = await Promise.all([
-      supabase.from("greenhouse_groups").select("id, name").order("name"),
-      supabase.from("majors").select("id, name").order("name"),
-      supabase
-        .from("learning_groups")
-        .select("id, name, is_active")
-        .order("name"),
-      supabase
-        .from("profiles")
-        .select("id, email, full_name, auth_user_id")
-        .eq("is_active", true)
-        .order("full_name"),
-    ]);
+  if (editorRes) {
+    const [groupsRes, majorsRes, lgRes, staffRes] = editorRes;
     editorData = {
       groups: groupsRes.data ?? [],
       majors: majorsRes.data ?? [],

@@ -131,8 +131,25 @@ async function ensureTempStudent(admin: Admin): Promise<void> {
     const { error } = await admin
       .from("students")
       .insert({ first_name: "בדיקה", last_name: "זמנית", group_id: GROUP_SHAKED });
-    if (error) throw new Error(`temp student insert failed: ${error.message}`);
+    if (error && !isUniqueViolation(error.message)) {
+      throw new Error(`temp student insert failed: ${error.message}`);
+    }
   }
+}
+
+/**
+ * Ensure-helpers tolerate unique-violation races: BOTH Playwright projects
+ * run the same spec against ONE shared local DB, so the check-then-insert
+ * window can be lost between projects. A duplicate here means the row
+ * already exists — which is exactly the state we need.
+ */
+function isUniqueViolation(message: string | undefined): boolean {
+  return Boolean(
+    message &&
+      (message.includes("duplicate key") ||
+        message.includes("unique constraint") ||
+        message.includes("already exists"))
+  );
 }
 
 async function ensureLgMembership(admin: Admin, groupId: string, studentId: string) {
@@ -150,7 +167,9 @@ async function ensureLgMembership(admin: Admin, groupId: string, studentId: stri
       source: "manual",
       added_by_staff_id: STAFF_MENTOR_MICHAL,
     });
-    if (error) throw new Error(`membership insert failed: ${error.message}`);
+    if (error && !isUniqueViolation(error.message)) {
+      throw new Error(`membership insert failed: ${error.message}`);
+    }
   }
 }
 
@@ -170,7 +189,9 @@ async function ensureLeoMondayWorkException(admin: Admin, date: string) {
       end_time: "14:00:00",
       created_by_staff_id: STAFF_EMPLOYMENT_ITAY,
     });
-    if (error) throw new Error(`exception insert failed: ${error.message}`);
+    if (error && !isUniqueViolation(error.message)) {
+      throw new Error(`exception insert failed: ${error.message}`);
+    }
   }
 }
 
@@ -272,7 +293,7 @@ test.describe("discoverability: attendance through visible UI (no URL typing)", 
     await page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 20_000 });
 
     // the home card is prominent, names the group and shows live counts
-    const card = page.getByRole("link", { name: /נוכחות קבוצת האם · קבוצת זית/ });
+    const card = page.getByRole("link", { name: /נוכחות הקבוצה · קבוצת זית/ });
     await expect(card).toBeVisible();
     await expect(card.getByText(/\d+\/\d+ דווחו/)).toBeVisible();
     await expect(card.getByText(/\d+ חסרים/)).toBeVisible();

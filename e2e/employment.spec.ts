@@ -34,9 +34,8 @@ test.describe("employment management (desktop)", () => {
     const table = page.getByRole("table");
     await expect(table).toBeVisible();
 
-    // seeded rows: partial (690min = 11.5h) / exactly 200 / above (204h)
+    // seeded rows: partial (690min = 11.5h, זית) / exactly-200 (שקד) / above (204h, רימון)
     await expect(page.getByText("11.5 שעות / 200 שעות").first()).toBeVisible();
-    await expect(page.getByText("200 שעות / 200 שעות").first()).toBeVisible();
     await expect(page.getByText("204 שעות / 200 שעות").first()).toBeVisible();
 
     // >200h: the numeric label may exceed 200 but the bar must NOT overflow
@@ -46,14 +45,13 @@ test.describe("employment management (desktop)", () => {
       aboveRow.locator('span[style*="width"]').last()
     ).toHaveAttribute("style", /width:\s*100(\.0)?%/);
 
-    // cohort eligibility is DERIVED (no per-student year UI anywhere):
-    // seeded cohorts זית=ז(7) שקד=ש(21) רימון=ר(20) דקל=ד(4) → שקד youngest
-    await expect(page.getByRole("columnheader", { name: "זכאות" })).toBeVisible();
-    const shakedRow = page.locator("tr", { hasText: "ליאו הלוי" }).first();
-    await expect(shakedRow.getByText("לא · שנתון צעיר")).toBeVisible();
-    const zionRow = page.locator("tr", { hasText: "נועם אבידן" }).first();
-    await expect(zionRow.getByText("כן", { exact: true })).toBeVisible();
-    // no per-student year workflow exists anymore
+    // eligibility is operational logic, not a column: only EFFECTIVELY-eligible
+    // students are listed (seeded cohorts זית=ז(7) שקד=ש(21) רימון=ר(20) דקל=ד(4)
+    // → שקד is the youngest and never reaches this screen)
+    await expect(page.getByRole("columnheader", { name: "זכאות" })).toHaveCount(0);
+    await expect(page.getByRole("columnheader", { name: "קבוצה", exact: true })).toBeVisible();
+    await expect(page.getByText("ליאו הלוי")).toHaveCount(0);
+    await expect(page.getByText("לא · שנתון צעיר")).toHaveCount(0);
     await expect(page.getByText("שנה לא הוגדרה")).toHaveCount(0);
     await expect(page.getByLabel("שכבה")).toHaveCount(0);
 
@@ -95,7 +93,7 @@ test.describe("employment management (desktop)", () => {
     await logout(page);
   });
 
-  test("View-As blocks employment mutations", async ({ page }) => {
+  test("View-As as plain staff: management hidden and mutations blocked", async ({ page }) => {
     await login(page, USERS.admin);
     await page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 20_000 });
     await page.goto("/admin");
@@ -104,13 +102,11 @@ test.describe("employment management (desktop)", () => {
     await page.getByRole("button", { name: "הפעלה" }).click();
     await expect(page.getByText("מצב צפייה כ־")).toBeVisible();
 
-    // View-As as plain staff → management screens render read-only:
-    // no mutation controls anywhere
+    // a simulated ordinary staff member gets the ordinary read experience:
+    // no ניהול entry anywhere, and management routes are denied outright
+    await expect(page.getByRole("link", { name: "ניהול" })).toHaveCount(0);
     await page.goto("/admin/employment/44444444-4444-4444-4444-444444444401");
-    await expect(page.getByText("שיבוץ לעבודה (צפייה בלבד)")).toBeVisible();
-    await expect(page.getByRole("button", { name: "שמירת שינויים" })).toBeHidden();
-    await expect(page.getByRole("button", { name: "סיום שיבוץ" })).toBeHidden();
-    await expect(page.getByRole("button", { name: "רישום שעות" })).toBeHidden();
+    await page.waitForURL((u) => !u.pathname.startsWith("/admin"));
     await logout(page);
   });
 });

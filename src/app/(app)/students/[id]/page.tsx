@@ -19,6 +19,7 @@ import { jerusalemParts } from "@/lib/meetings";
 import { isoDate } from "@/lib/schedule";
 import type { EffectiveSchoolStatus } from "@/lib/attendance";
 import { getViewAsState } from "@/lib/view-as";
+import { getUnreadCounts } from "@/lib/unread";
 
 export const metadata = { title: "חניך" };
 
@@ -26,21 +27,46 @@ export default async function StudentPage({
   params,
   searchParams,
 }: PageProps<"/students/[id]">) {
-  const me = await requireMe();
-  const viewAs = await getViewAsState();
-  const { id } = await params;
-  const sp = await searchParams;
+  const [{ id }, sp, supabase] = await Promise.all([params, searchParams, createClient()]);
   const focusMessageId = typeof sp.m === "string" ? sp.m : undefined;
+  const jp = jerusalemParts(new Date());
 
-  const supabase = await createClient();
-
-  const studentRes = await supabase
-    .from("students")
-    .select(
-      "id, first_name, last_name, is_archived, group_id, major_id, greenhouse_groups(id, name), majors(id, name)"
-    )
-    .eq("id", id)
-    .maybeSingle();
+  // Everything below is keyed by the student id from the URL (RLS-scoped,
+  // read-only STABLE RPCs), so it all starts together with the shared
+  // identity / View-As / unread lookups in ONE round trip. Nothing is
+  // rendered before requireMe() has passed.
+  const [
+    me,
+    viewAs,
+    studentRes,
+    mastersRes,
+    feedRes,
+    unreadByStudent,
+    schedulesRes,
+    reportableRes,
+    employmentRes,
+    effectiveRes,
+  ] = await Promise.all([
+    requireMe(),
+    getViewAsState(),
+    supabase
+      .from("students")
+      .select(
+        "id, first_name, last_name, is_archived, group_id, major_id, greenhouse_groups(id, name, group_mentors(profiles(id, full_name))), majors(id, name)"
+      )
+      .eq("id", id)
+      .maybeSingle(),
+    supabase.from("master_assignments").select("profiles(id, full_name)").eq("student_id", id),
+    supabase.rpc("student_feed_items", { p_student_id: id }),
+    getUnreadCounts(),
+    supabase.from("meeting_schedules").select("id, staff_id, context, weekday, meeting_time, is_active, profiles(full_name)").eq("student_id", id).order("weekday"),
+    supabase.rpc("my_reportable_occurrences", { p_student_id: id }),
+    supabase.rpc("student_employment_overview", { p_student_id: id }),
+    supabase.rpc("student_effective_school_status", {
+      p_student_id: id,
+      p_date: isoDate(jp.year, jp.month, jp.day),
+    }),
+  ]);
 
   const student = studentRes.data as unknown as
     | {
@@ -50,48 +76,29 @@ export default async function StudentPage({
         is_archived: boolean;
         group_id: string | null;
         major_id: string | null;
-        greenhouse_groups: { id: string; name: string } | null;
+        greenhouse_groups: {
+          id: string;
+          name: string;
+          group_mentors: Array<{ profiles: { id: string; full_name: string | null } | null }> | null;
+        } | null;
         majors: { id: string; name: string } | null;
       }
     | null;
 
   if (!student) notFound();
 
-  const jp = jerusalemParts(new Date());
+  const unreadCount = unreadByStudent.get(student.id) ?? 0;
 
-  const [mentorsRes, mastersRes, feedRes, countsRes, myMentorRes, myMasterRes, schedulesRes, reportableRes, employmentRes, effectiveRes] =
-    await Promise.all([
-      student.group_id
-        ? supabase.from("group_mentors").select("profiles(id, full_name)").eq("group_id", student.group_id)
-        : Promise.resolve({ data: [] as never[] }),
-      supabase.from("master_assignments").select("profiles(id, full_name)").eq("student_id", student.id),
-      supabase.rpc("student_feed_items", { p_student_id: student.id }),
-      supabase.rpc("student_unread_counts"),
-      student.group_id
-        ? supabase.from("group_mentors").select("group_id").eq("group_id", student.group_id).eq("staff_id", me.staffId!).maybeSingle()
-        : Promise.resolve({ data: null }),
-      supabase.from("master_assignments").select("student_id").eq("student_id", student.id).eq("staff_id", me.staffId!).maybeSingle(),
-      supabase.from("meeting_schedules").select("id, staff_id, context, weekday, meeting_time, is_active, profiles(full_name)").eq("student_id", student.id).order("weekday"),
-      supabase.rpc("my_reportable_occurrences", { p_student_id: student.id }),
-      supabase.rpc("student_employment_overview", { p_student_id: student.id }),
-      supabase.rpc("student_effective_school_status", {
-        p_student_id: student.id,
-        p_date: isoDate(jp.year, jp.month, jp.day),
-      }),
-    ]);
-
-  const unreadCount = Number(
-    ((countsRes.data ?? []) as Array<{ student_id: string; unread_count: number }>).find(
-      (c) => c.student_id === student.id
-    )?.unread_count ?? 0
-  ) || 0;
-
-  const canModerate = Boolean(myMentorRes.data);
+  // the real user's canonical relationships (group_mentors /
+  // master_assignments) arrive with the identity
+  const isMyMentee = Boolean(student.group_id && me.mentorGroupIds.includes(student.group_id));
+  const isMyMasterStudent = me.masterStudentIds.includes(student.id);
+  const canModerate = isMyMentee;
   const privileged = isPrivileged(me);
   const isSuper = me.roles.includes("super_admin");
 
-  const mentorNames = (mentorsRes.data ?? [])
-    .map((m) => (m as unknown as { profiles: { full_name: string | null } | null }).profiles?.full_name)
+  const mentorNames = (student.greenhouse_groups?.group_mentors ?? [])
+    .map((m) => m.profiles?.full_name)
     .filter((n): n is string => Boolean(n));
 
   const masterNames = (mastersRes.data ?? [])
@@ -99,8 +106,8 @@ export default async function StudentPage({
     .filter((n): n is string => Boolean(n));
 
   const allowedContexts: ("mentor" | "master")[] = [
-    ...(myMentorRes.data || isSuper ? (["mentor"] as const) : []),
-    ...(myMasterRes.data || isSuper ? (["master"] as const) : []),
+    ...(isMyMentee || isSuper ? (["mentor"] as const) : []),
+    ...(isMyMasterStudent || isSuper ? (["master"] as const) : []),
   ];
 
   const schedules: ScheduleRow[] = (schedulesRes.data ?? []).map((s) => {
@@ -193,7 +200,7 @@ export default async function StudentPage({
           }
           canManage={
             !viewAs.active &&
-            (Boolean(myMentorRes.data) ||
+            (isMyMentee ||
               hasRole(me, "leadership") ||
               hasRole(me, "super_admin"))
           }
@@ -201,6 +208,12 @@ export default async function StudentPage({
         <StudentEmploymentCard
           data={(employmentRes.data ?? {}) as unknown as EmploymentOverviewData}
           studentId={student.id}
+          canManageOverride={
+            !viewAs.active &&
+            (hasRole(me, "employment_coordinator") ||
+              hasRole(me, "leadership") ||
+              hasRole(me, "super_admin"))
+          }
         />
         <StudentMeetingsPanel
           studentId={student.id}

@@ -23,36 +23,47 @@ const migration = (name: string) =>
   );
 
 // ============================================================ 1. HOME ORDER ==
-describe("1. desktop home order", () => {
+describe("1. home composition (updates-free, relationship-scoped)", () => {
   const home = src("app/(app)/page.tsx");
 
-  it("renders the unread-updates section BEFORE the desktop student table", () => {
-    const updatesIdx = home.indexOf('aria-labelledby="unread-heading"');
-    const tableIdx = home.indexOf('title="כל החניכים"');
-    expect(updatesIdx).toBeGreaterThan(-1);
-    expect(tableIdx).toBeGreaterThan(-1);
-    expect(updatesIdx).toBeLessThan(tableIdx);
+  it("home no longer renders an Updates section (updates live on /updates)", () => {
+    expect(home).not.toContain('aria-labelledby="unread-heading"');
+    expect(home).not.toContain('href="/updates"');
   });
 
-  it("desktop dashboards are hidden on mobile (single source, no duplication)", () => {
-    expect(home).toMatch(/className="hidden flex-col gap-6 lg:flex"/);
+  it("home student lists are relationship-scoped via the canonical tables", () => {
+    // the canonical relationships arrive with the request identity
+    // (current_staff_context — one round trip) instead of per-page queries
+    expect(home).toContain("me.mentorGroupIds");
+    expect(home).toContain("me.masterStudentIds");
+    const ctx = migration("20260923000004_performance_hot_paths.sql");
+    const fn = ctx.slice(ctx.indexOf("function public.current_staff_context()"));
+    expect(fn).toContain("from public.group_mentors gm");
+    expect(fn).toContain("from public.master_assignments ma");
+    // …never from the role list
+    expect(fn).not.toMatch(/mentor_group_ids[\s\S]{0,200}user_roles/);
+    expect(home).toContain("scopeHomeStudents");
+    // no broad all-students table on Home
+    expect(home).not.toContain("כל החניכים");
   });
 });
 
 // ======================================================= 2. DUPLICATE SEARCH ==
-describe("2. duplicate student search", () => {
+describe("2. student search lives on Home (single entry, all viewports)", () => {
   const home = src("app/(app)/page.tsx");
   const table = src("components/tables/StudentDataTable.tsx");
 
-  it("home global-search entry is hidden on desktop (lg:hidden)", () => {
+  it("the home global-search entry is visible on every viewport (no lg:hidden)", () => {
     const linkBlock = home.slice(
       home.indexOf('href="/search"'),
       home.indexOf("</Link>", home.indexOf('href="/search"'))
     );
-    expect(linkBlock).toContain("lg:hidden");
+    expect(linkBlock).not.toContain("lg:hidden");
+    // exactly ONE global search entry on Home
+    expect(home.match(/href="\/search"/g)).toHaveLength(1);
   });
 
-  it("the StudentDataTable search toolbar is the single desktop student search", () => {
+  it("the StudentDataTable search toolbar stays a per-table filter", () => {
     expect(table).toMatch(/type="search"/);
     expect(table).toMatch(/חיפוש חניך/);
     // exactly one search input rendered per table
@@ -139,11 +150,9 @@ describe("4. ordinary student update edit/delete", () => {
 });
 
 // ================================================= 5. ADMIN ACTIVITY LOG =====
-describe("5. admin home activity log", () => {
+describe("5. admin home activity log (paginated + actor filter)", () => {
   const admin = src("app/(app)/admin/page.tsx");
-  const mig = migration(
-    "20260921000002_message_edit_audit_and_feed_author.sql"
-  );
+  const mig = migration("20260923000002_employment_override_and_audit_pagination.sql");
 
   it("renders לוג פעילות and does NOT render מצב תצורה", () => {
     expect(admin).toContain("לוג פעילות");
@@ -151,21 +160,32 @@ describe("5. admin home activity log", () => {
     expect(admin).not.toContain("hasVapidConfig");
   });
 
-  it("reads the existing audit_logs through a safe RPC, newest first", () => {
-    expect(admin).toContain('"recent_audit_logs"');
+  it("pages through audit_logs via a safe server-side paginated RPC", () => {
+    expect(admin).toContain('"audit_logs_page"');
+    expect(admin).toContain('"audit_logs_total"');
+    expect(admin).not.toContain('"recent_audit_logs"');
     expect(mig).toMatch(/order by l\.created_at desc/);
     expect(mig).toMatch(/security definer/);
+    expect(mig).toMatch(/limit greatest\(1, least\(coalesce\(p_page_size, 20\), 100\)\)/);
+    expect(mig).toMatch(/offset greatest\(0, coalesce\(p_page, 1\) - 1\)/);
     // server authorization: coordinator/super_admin only
     expect(mig).toMatch(/staff_has_role\(public\.current_staff_id\(\), 'super_admin'\)/);
     expect(mig).toMatch(/staff_has_role\(public\.current_staff_id\(\), 'project_coordinator'\)/);
   });
 
+  it("actor filter + pagination compose via the query string", () => {
+    expect(admin).toMatch(/pageHref\(page - 1, actor\)/);
+    expect(admin).toMatch(/name="actor"/);
+    expect(admin).toContain("איש/אשת צוות");
+  });
+
   it("does not expose sensitive report contents (safe columns only)", () => {
     const fn = mig.slice(
-      mig.indexOf("create or replace function public.recent_audit_logs")
+      mig.indexOf("create or replace function public.audit_logs_page")
     );
     expect(fn).toContain("actor_name");
     expect(fn).not.toMatch(/\bbody\b/);
+    expect(fn).not.toMatch(/\bmetadata\b/);
   });
 });
 

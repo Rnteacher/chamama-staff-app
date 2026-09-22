@@ -176,7 +176,7 @@ export default function LearningGroupForm({
 
       <MultiSelectCheckbox
         name="staffLeaderIds"
-        label="מדריכים (סגל) — אפשר לבחור יותר מאחד"
+        label="מדריכים (צוות) — אפשר לבחור יותר מאחד"
         options={staffOptions}
         selectedIds={values.staffLeaderIds}
       />

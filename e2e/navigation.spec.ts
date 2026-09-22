@@ -9,10 +9,12 @@ test.describe("navigation", () => {
 
     // bottom nav: קבוצות
     await page.getByRole("navigation", { name: "ניווט ראשי" }).getByText("קבוצות").click();
-    await expect(page.getByRole("heading", { name: "קבוצות החממה" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "קבוצות", exact: true })).toBeVisible();
 
-    // open a seeded group
-    await page.getByText("קבוצת זית").click();
+    // open a seeded group (wait for the navigation to land on the group page —
+    // the mentor line exists on BOTH the list cards and the group page)
+    await page.getByRole("link", { name: /קבוצת זית/ }).first().click();
+    await page.waitForURL(/\/groups\/[0-9a-f-]{36}$/, { timeout: 10_000 });
     await expect(page.getByText("מנטורים: מיכל שרון")).toBeVisible();
 
     // open a seeded student
@@ -22,9 +24,23 @@ test.describe("navigation", () => {
     await expect(page.getByRole("button", { name: "שליחת עדכון" })).toBeVisible();
   });
 
-  test("student search by partial Hebrew name", async ({ page }) => {
+  test("bottom nav: Search and More are gone; Settings replaces More", async ({
+    page,
+  }) => {
     await login(page, USERS.staff);
-    await page.getByRole("navigation", { name: "ניווט ראשי" }).getByText("חיפוש").click();
+    const nav = page.getByRole("navigation", { name: "ניווט ראשי" });
+    await expect(nav.getByText("חיפוש")).toHaveCount(0);
+    await expect(nav.getByText("עוד")).toHaveCount(0);
+    await expect(nav.getByText("הגדרות")).toBeVisible();
+    await expect(nav.getByText("עדכונים")).toBeVisible();
+    await expect(nav.getByText("בית")).toBeVisible();
+  });
+
+  test("student search lives on Home (no dedicated nav destination)", async ({
+    page,
+  }) => {
+    await login(page, USERS.staff);
+    await page.getByRole("link", { name: "חיפוש חניך…" }).click();
     await page.getByLabel("חיפוש חניך לפי שם").fill("נוע");
     await expect(page.getByText("נועם אבידן")).toBeVisible();
     await page.getByLabel("חיפוש חניך לפי שם").fill("זזזלאנמצא");

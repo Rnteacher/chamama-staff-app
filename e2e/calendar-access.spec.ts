@@ -41,9 +41,13 @@ test.describe("calendar permissions (desktop)", () => {
     await login(page, USERS.staff);
     await page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 20_000 });
 
-    // no calendar-management navigation for ordinary staff
+    // no calendar-management navigation for ordinary staff (neither top bar
+    // nor bottom nav — the bottom-nav Calendar item is authorization-gated)
     await expect(
       page.getByRole("navigation", { name: "תפריט עליון" }).getByRole("link", { name: "לוח שנה" })
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("navigation", { name: "ניווט ראשי" }).getByRole("link", { name: "לוח שנה" })
     ).toHaveCount(0);
     await expect(page.getByRole("link", { name: "לוח שנה ›" })).toHaveCount(0);
 
@@ -66,7 +70,7 @@ test.describe("calendar permissions (desktop)", () => {
     await page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 20_000 });
 
     await page
-      .getByRole("navigation", { name: "תפריט עליון" })
+      .getByRole("navigation", { name: "ניווט ראשי" })
       .getByRole("link", { name: "לוח שנה" })
       .click();
     await page.waitForURL((u) => u.pathname === "/calendar", { timeout: 10_000 });

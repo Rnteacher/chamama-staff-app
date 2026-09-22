@@ -18,8 +18,9 @@ export default async function EmploymentAdminPage() {
   if (!allowed) redirect("/?error=אין%20הרשאה%20לניהול%20תעסוקה");
   const supabase = await createClient();
 
-  // Eligibility is DERIVED from the home-group cohort order (canonical SQL) —
-  // no per-student year assignment exists in this screen.
+  // Eligibility is canonical SQL (effective = override if present, otherwise
+  // the cohort default): employment_admin_rows lists ONLY effectively-eligible
+  // students — the auto-ineligible youngest cohort never reaches this screen.
   const [rowsRes, groupsRes, cohortRes] = await Promise.all([
     supabase.rpc("employment_admin_rows"),
     supabase.from("greenhouse_groups").select("id, name").order("name"),
@@ -31,6 +32,7 @@ export default async function EmploymentAdminPage() {
     student_name: string;
     group_name: string | null;
     employment_eligible: boolean;
+    override: string | null;
     cohort_note: string | null;
     placement_id: string | null;
     workplace_name: string | null;
@@ -42,8 +44,6 @@ export default async function EmploymentAdminPage() {
     studentId: r.student_id,
     studentName: r.student_name,
     groupName: r.group_name,
-    employmentEligible: r.employment_eligible,
-    cohortNote: r.cohort_note,
     placementId: r.placement_id,
     workplaceName: r.workplace_name,
     placementActive: r.placement_active,
@@ -66,8 +66,6 @@ export default async function EmploymentAdminPage() {
         <h1 className="text-xl font-extrabold">ניהול תעסוקה</h1>
         <p className="mt-1 text-sm text-muted">
           שיבוצי עבודה, ימי עבודה מתוכננים וצבירת שעות לקראת יעד 200 השעות.
-          זכאות נגזרת מסדר השנתון של קבוצות האם — כל השנתונים הפעילים חוץ
-          מהצעיר שבהם.
         </p>
       </header>
 

@@ -17,12 +17,13 @@ export const metadata = { title: "קבוצת למידה" };
 export default async function LearningGroupPage({
   params,
 }: PageProps<"/groups/learning/[id]">) {
-  const me = await requireMe();
-  const { id } = await params;
-  const supabase = await createClient();
+  const [{ id }, supabase] = await Promise.all([params, createClient()]);
 
-  const [groupRes, slotsRes, staffRes, studentRes, membersRes, allStudentsRes] =
+  // RLS-scoped reads start together with the shared identity check (one
+  // round trip); nothing is rendered before requireMe() has passed.
+  const [me, groupRes, slotsRes, staffRes, studentRes, membersRes, allStudentsRes] =
     await Promise.all([
+      requireMe(),
       supabase
         .from("learning_groups")
         .select("id, name, description, is_active")
@@ -161,7 +162,7 @@ export default async function LearningGroupPage({
 
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="rounded-2xl border border-line bg-surface p-4">
-            <h2 className="text-sm font-bold">מדריכים (סגל)</h2>
+            <h2 className="text-sm font-bold">מדריכים (צוות)</h2>
             {staffLeaders.length === 0 ? (
               <p className="mt-1 text-sm text-muted">אין</p>
             ) : (
@@ -225,7 +226,7 @@ export default async function LearningGroupPage({
         <aside className="w-full lg:w-96 lg:shrink-0">
           <LearningGroupMemberPicker groupId={group.id} students={pickerStudents} />
           <p className="mt-2 text-xs text-muted">
-            ההוספה/הסרה משנה רק את הרשימה של קבוצת הלמידה — קבוצת האם של החניך/ה
+            ההוספה/הסרה משנה רק את הרשימה של קבוצת הלמידה — הקבוצה של החניך/ה
             אינה מושפעת.
           </p>
         </aside>

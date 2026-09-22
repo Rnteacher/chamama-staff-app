@@ -43,7 +43,7 @@ export default function NewFormPage() {
         </label>
         <label className="block text-sm font-semibold">קהל יעד
           <select name="audience" className="mt-1 w-full rounded-xl border border-line bg-white px-3 py-2">
-            <option value="staff">סגל (התחברות)</option>
+            <option value="staff">צוות (התחברות)</option>
             <option value="public">ציבור (קישור מוגן)</option>
           </select>
         </label>

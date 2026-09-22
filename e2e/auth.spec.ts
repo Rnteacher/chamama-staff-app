@@ -15,7 +15,9 @@ test.describe("auth & access", () => {
     await expect(
       page.getByRole("heading", { name: "אין הרשאת גישה" })
     ).toBeVisible();
-    await expect(page.getByText("דנה אביבי")).toBeVisible();
+    // the page identifies the blocked account by its EMAIL (never the name)
+    await expect(page.getByText("dana@chamama.example")).toBeVisible();
+    await expect(page.getByText(/אינו מוגדר כאיש צוות פעיל/)).toBeVisible();
   });
 
   test("authorized staff reaches the dashboard", async ({ page }) => {

@@ -12,8 +12,21 @@ const MAYA = "מאיה דרורי";
 const MARK_READ = "סמן כנקרא";
 const MARK_UNREAD = "סמן כלא נקרא";
 
+/**
+ * The optimistic toggle flips the label immediately; the write happens in a
+ * server action. Wait for that action to be answered before reloading —
+ * otherwise the reload races the in-flight write (the reloaded page can read
+ * the feed before the upsert/delete commits).
+ */
+function readStateActionDone(page: import("@playwright/test").Page) {
+  return page.waitForResponse(
+    (r) => r.request().method() === "POST" && Boolean(r.request().headers()["next-action"])
+  );
+}
+
 async function openStudent(page: import("@playwright/test").Page, name: string) {
-  await page.getByRole("navigation", { name: "ניווט ראשי" }).getByText("חיפוש").click();
+  // search lives on Home now (no dedicated bottom-nav Search item)
+  await page.getByRole("link", { name: "חיפוש חניך…" }).click();
   await page.getByLabel("חיפוש חניך לפי שם").fill(name);
   await page.getByText(name).first().click();
   await expect(page.getByRole("heading", { name })).toBeVisible();
@@ -29,7 +42,9 @@ test("mark read/unread persists across reload on the student feed", async ({ pag
   const before = (await first.textContent())!.trim();
   const after = before === MARK_READ ? MARK_UNREAD : MARK_READ;
 
+  const flipDone = readStateActionDone(page);
   await first.click();
+  await flipDone;
   const flipped = page.getByRole("button", { name: after }).first();
   await expect(flipped).toBeVisible();
 
@@ -38,7 +53,9 @@ test("mark read/unread persists across reload on the student feed", async ({ pag
   await expect(page.getByRole("button", { name: after }).first()).toBeVisible();
 
   // flip back and verify the original state persists too
+  const flipBackDone = readStateActionDone(page);
   await page.getByRole("button", { name: after }).first().click();
+  await flipBackDone;
   await expect(page.getByRole("button", { name: before }).first()).toBeVisible();
   await page.reload();
   await expect(page.getByRole("button", { name: before }).first()).toBeVisible();

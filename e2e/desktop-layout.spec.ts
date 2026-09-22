@@ -10,19 +10,28 @@ test.skip(SKIP, "E2E requires a running local stack (see e2e/helpers.ts)");
  */
 
 test.describe("desktop layout", () => {
-  test("home: shell uses desktop width, table is wide, single student search", async ({ page }) => {
+  test.skip(({ viewport }) => (viewport?.width ?? 0) < 1024, "desktop-only view");
+
+  test("home: shell uses desktop width; ordinary staff get search, not a role table", async ({
+    page,
+  }) => {
     await login(page, USERS.staff);
 
     const main = page.locator("main");
     const width = (await main.boundingBox())?.width ?? 0;
     expect(width).toBeGreaterThan(1200);
 
-    // the desktop student table renders (lg-only dashboard)
-    await expect(page.getByRole("table").first()).toBeVisible();
+    // the global student-search entry is visible on desktop too
+    await expect(page.getByRole("link", { name: "חיפוש חניך…" })).toBeVisible();
 
-    // the mobile-only search entry is hidden on desktop (exactly one search)
-    const mobileSearch = page.locator('a[href="/search"].lg\\:hidden');
-    await expect(mobileSearch).toBeHidden();
+    // ordinary staff (no mentor/master relationship) get NO role-based table
+    await expect(page.getByRole("table")).toHaveCount(0);
+  });
+
+  test("home: mentor sees a relationship-scoped table on desktop", async ({ page }) => {
+    await login(page, USERS.mentor);
+    await expect(page.getByRole("table").first()).toBeVisible();
+    await expect(page.getByText("החניכים שלי", { exact: true })).toBeVisible();
   });
 
   test("home: canvas is capped at 1600px on very wide screens", async ({ page }) => {

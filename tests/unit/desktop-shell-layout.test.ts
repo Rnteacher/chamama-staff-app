@@ -48,20 +48,22 @@ describe("2. bottom navigation does not constrain content", () => {
 describe("3. desktop home composition", () => {
   const home = src("app/(app)/page.tsx");
 
-  it("unread updates render as a multi-column card grid on md/xl", () => {
-    expect(home).toMatch(/grid gap-2 md:grid-cols-2 xl:grid-cols-3/);
+  it("updates are NOT part of home (updates live on /updates)", () => {
+    expect(home).not.toContain('aria-labelledby="unread-heading"');
   });
 
-  it("mobile search entry stays hidden on desktop (single student search)", () => {
+  it("the global student-search entry is visible on every viewport", () => {
     const linkBlock = home.slice(
       home.indexOf('href="/search"'),
       home.indexOf("</Link>", home.indexOf('href="/search"'))
     );
-    expect(linkBlock).toContain("lg:hidden");
+    expect(linkBlock).not.toContain("lg:hidden");
   });
 
-  it("desktop student tables remain the lg-only dashboard sections", () => {
-    expect(home).toMatch(/className="hidden flex-col gap-6 lg:flex"/);
+  it("relationship-scoped student tables remain the lg-only dashboard", () => {
+    const panel = src("components/home/HomeStudentsPanel.tsx");
+    expect(panel).toMatch(/className="hidden lg:block"/);
+    expect(panel).toMatch(/className="flex flex-col gap-2 lg:hidden"/);
   });
 });
 

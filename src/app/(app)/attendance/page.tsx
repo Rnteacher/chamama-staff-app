@@ -27,44 +27,34 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export default async function AttendancePage({
   searchParams,
 }: PageProps<"/attendance">) {
-  const me = await requireMe();
-  const viewAs = await getViewAsState();
-  const supabase = await createClient();
-
-  const sp = await searchParams;
+  const [sp, supabase] = await Promise.all([searchParams, createClient()]);
   const jp = jerusalemParts(new Date());
   const today = isoDate(jp.year, jp.month, jp.day);
   const date = typeof sp.date === "string" && DATE_RE.test(sp.date) ? sp.date : today;
 
-  const isBroad = hasRole(me, "leadership") || hasRole(me, "super_admin");
-
-  // writable groups: home-group mentors see THEIR groups; leadership /
-  // super_admin see all. (The RPCs enforce the same server-side.)
-  const [mentoredRes, allGroupsRes] = await Promise.all([
-    supabase
-      .from("group_mentors")
-      .select("group_id, greenhouse_groups(id, name)")
-      .eq("staff_id", me.staffId ?? ""),
+  // the group list (RLS-scoped) loads together with the shared identity check
+  const [me, viewAs, allGroupsRes] = await Promise.all([
+    requireMe(),
+    getViewAsState(),
     supabase.from("greenhouse_groups").select("id, name").order("name"),
   ]);
 
+  const isBroad = hasRole(me, "leadership") || hasRole(me, "super_admin");
+
+  // writable groups: home-group mentors see THEIR groups (canonical
+  // group_mentors, delivered with the identity); leadership / super_admin
+  // see all. (The RPCs enforce the same server-side.)
   interface GroupRef { id: string; name: string }
-  let groups: GroupRef[] = [];
-  if (isBroad) {
-    groups = ((allGroupsRes.data ?? []) as unknown as GroupRef[]);
-  } else {
-    groups = ((mentoredRes.data ?? []) as unknown as Array<{
-      group_id: string; greenhouse_groups: GroupRef | null;
-    }>)
-      .map((r) => r.greenhouse_groups)
-      .filter((g): g is GroupRef => Boolean(g));
-  }
+  const allGroups = (allGroupsRes.data ?? []) as unknown as GroupRef[];
+  const groups: GroupRef[] = isBroad
+    ? allGroups
+    : allGroups.filter((g) => me.mentorGroupIds.includes(g.id));
 
   if (groups.length === 0) {
     return (
       <EmptyState
         title="אין קבוצות לדיווח נוכחות"
-        description="דיווח נוכחות יומי זמין למנטורים של קבוצות האם, להנהלה ולמנהל המערכת."
+        description="דיווח נוכחות יומי זמין למנטורים של קבוצות, להנהלה ולמנהל המערכת."
       />
     );
   }

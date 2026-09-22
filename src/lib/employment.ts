@@ -16,6 +16,36 @@
 export const EMPLOYMENT_TARGET_MINUTES = 12_000; // 200 שעות
 
 /**
+ * Manual per-student eligibility override (tri-state — canonical SQL:
+ * student_employment_overrides + student_employment_eligible, migration
+ * 20260923000002). A missing row means "automatic": the cohort default.
+ * "automatic" is deliberately distinct from an explicit allow/deny.
+ */
+export type EmploymentOverride = "eligible" | "ineligible";
+export type EmploymentOverrideState = EmploymentOverride | "automatic";
+
+export const EMPLOYMENT_OVERRIDE_LABELS: Record<EmploymentOverrideState, string> = {
+  automatic: "ברירת מחדל",
+  eligible: "לאפשר תעסוקה",
+  ineligible: "לא לאפשר תעסוקה",
+};
+
+/**
+ * Canonical effective eligibility precedence (mirrors
+ * public.student_employment_eligible): 1. explicit override if present,
+ * 2. otherwise the Hebrew-cohort default. Never re-derive this in React —
+ * this mirror exists for validation and unit tests only.
+ */
+export function effectiveEmploymentEligibility(
+  cohortEligible: boolean,
+  override: EmploymentOverrideState
+): boolean {
+  if (override === "eligible") return true;
+  if (override === "ineligible") return false;
+  return cohortEligible;
+}
+
+/**
  * TypeScript mirror of public.hebrew_cohort_rank(): explicit Hebrew alphabet
  * rank (א=1..ת=22, final-letter forms normalized, leading "קבוצת" skipped).
  * NULL when no meaningful Hebrew letter is found — "cannot determine",
@@ -136,6 +166,8 @@ export const EXCEPTION_KIND_LABELS: Record<string, string> = {
 
 export interface EmploymentOverviewData {
   eligible: boolean;
+  /** tri-state manual override; null = automatic (cohort default) */
+  override: EmploymentOverrideState | null;
   /** cohort context: youngest-cohort note or invalid-group-name warning */
   cohort_note: string | null;
   placement: {

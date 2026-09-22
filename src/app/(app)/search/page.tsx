@@ -1,26 +1,24 @@
 import { requireMe } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import { getUnreadCounts } from "@/lib/unread";
 import SearchClient from "@/components/SearchClient";
 
 export const metadata = { title: "חיפוש חניך" };
 
 export default async function SearchPage() {
-  await requireMe();
   const supabase = await createClient();
 
-  const [studentsRes, countsRes] = await Promise.all([
+  // RLS-scoped reads start together with the shared identity check (one
+  // round trip); nothing is rendered before requireMe() has passed.
+  const [, studentsRes, unreadByStudent] = await Promise.all([
+    requireMe(),
     supabase
       .from("students")
       .select("id, first_name, last_name, greenhouse_groups(name), majors(name)")
       .eq("is_archived", false)
       .order("first_name"),
-    supabase.rpc("student_unread_counts"),
+    getUnreadCounts(),
   ]);
-
-  const unreadByStudent = new Map<string, number>();
-  for (const row of countsRes.data ?? []) {
-    unreadByStudent.set(row.student_id, Number(row.unread_count));
-  }
 
   const students = (studentsRes.data ?? []).map((s) => {
     const row = s as unknown as {

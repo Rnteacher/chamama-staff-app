@@ -61,7 +61,7 @@ export default async function AdminFormsPage() {
                     </Link>
                     <span dir="ltr" className="mr-2 text-xs text-muted">{f.form_key}</span>
                     <p className="text-xs text-muted">
-                      {f.audience === "public" ? "ציבורי" : "סגל"} · עודכן{" "}
+                      {f.audience === "public" ? "ציבורי" : "צוות"} · עודכן{" "}
                       {new Date(f.updated_at).toLocaleDateString("he-IL")} ·{" "}
                       {submissionCounts.get(f.id) ?? 0} הגשות
                     </p>

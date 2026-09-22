@@ -1,28 +1,27 @@
 import Link from "next/link";
 import { requireMe } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import { getUnreadCounts } from "@/lib/unread";
 import EmptyState from "@/components/EmptyState";
 
 export const metadata = { title: "מגמות" };
 
 export default async function MajorsPage() {
-  await requireMe();
   const supabase = await createClient();
 
-  const [majorsRes, studentsRes, headsRes, countsRes] = await Promise.all([
+  // RLS-scoped reads start together with the shared identity check (one
+  // round trip); nothing is rendered before requireMe() has passed.
+  const [, majorsRes, studentsRes, headsRes, unreadByStudent] = await Promise.all([
+    requireMe(),
     supabase.from("majors").select("id, name").order("name"),
     supabase
       .from("students")
       .select("id, major_id")
       .eq("is_archived", false),
     supabase.from("major_heads").select("major_id, profiles(full_name)"),
-    supabase.rpc("student_unread_counts"),
+    getUnreadCounts(),
   ]);
 
-  const unreadByStudent = new Map<string, number>();
-  for (const row of countsRes.data ?? []) {
-    unreadByStudent.set(row.student_id, Number(row.unread_count));
-  }
   const unreadByMajor = new Map<string, number>();
   for (const s of studentsRes.data ?? []) {
     if (!s.major_id) continue;
@@ -60,7 +59,7 @@ export default async function MajorsPage() {
             return (
               <li key={m.id}>
                 <Link
-                  href={`/majors/${m.id}`}
+                  href={`/majors/${m.id}`} prefetch={false}
                   className="flex min-h-[68px] items-center gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40"
                 >
                   <span className="min-w-0 flex-1">

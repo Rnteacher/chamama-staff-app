@@ -6,13 +6,13 @@ import {
   setUserRolesAction,
   importStaffCsvAction,
 } from "@/lib/actions/admin";
-import { ALL_ROLES } from "@/lib/permissions";
+import { SELECTABLE_ROLES } from "@/lib/permissions";
 import { ROLE_LABELS } from "@/lib/constants";
 import AdminActionForm from "@/components/admin/AdminActionForm";
 import AdminCsvImport from "@/components/admin/AdminCsvImport";
 import type { Role } from "@/lib/permissions";
 
-export const metadata = { title: "ניהול · סגל" };
+export const metadata = { title: "ניהול · צוות" };
 
 export default async function AdminStaffPage() {
   await requireSuperAdmin();
@@ -64,10 +64,10 @@ export default async function AdminStaffPage() {
   return (
     <div className="flex flex-col gap-6">
       <section className="rounded-2xl border border-line bg-surface p-4">
-        <h2 className="font-extrabold">הוספת איש סגל</h2>
+        <h2 className="font-extrabold">הוספת איש/אשת צוות</h2>
         <p className="mt-1 text-sm text-muted">
-          איש הסגל נוצר מיד עם מזהה קבוע — ניתן לשייך אותו לתפקידים, קבוצות
-          וחניכים עוד לפני שהתחבר פעם ראשונה. בכניסה הראשונה חשבון ה-Google
+          איש/אשת הצוות נוצרים מיד עם מזהה קבוע — ניתן לשייך אותם לתפקידים, קבוצות
+          וחניכים עוד לפני שהתחברו פעם ראשונה. בכניסה הראשונה חשבון ה-Google
           מקושר אוטומטית לזהות הקיימת.
         </p>
         <AdminActionForm
@@ -104,7 +104,7 @@ export default async function AdminStaffPage() {
             </label>
           </div>
           <fieldset className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-            {ALL_ROLES.map((role) => (
+            {SELECTABLE_ROLES.map((role) => (
               <label key={role} className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
@@ -161,17 +161,19 @@ export default async function AdminStaffPage() {
               </div>
 
               <p className="mt-2 flex flex-wrap gap-1">
-                {roles.length === 0 ? (
+                {roles.filter((r) => r !== "staff").length === 0 ? (
                   <span className="text-xs text-muted">אין תפקידים</span>
                 ) : (
-                  roles.map((r) => (
-                    <span
-                      key={r}
-                      className="rounded-full bg-bg px-2 py-0.5 text-xs font-semibold"
-                    >
-                      {ROLE_LABELS[r as Role] ?? r}
-                    </span>
-                  ))
+                  roles
+                    .filter((r) => r !== "staff")
+                    .map((r) => (
+                      <span
+                        key={r}
+                        className="rounded-full bg-bg px-2 py-0.5 text-xs font-semibold"
+                      >
+                        {ROLE_LABELS[r as Role] ?? r}
+                      </span>
+                    ))
                 )}
               </p>
               {(groups.length > 0 || masterCount > 0) && (
@@ -194,7 +196,7 @@ export default async function AdminStaffPage() {
                   >
                     <input type="hidden" name="staffId" value={s.id} />
                     <fieldset className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-                      {ALL_ROLES.map((role) => (
+                      {SELECTABLE_ROLES.map((role) => (
                         <label
                           key={role}
                           className="flex items-center gap-2 text-sm"
@@ -249,10 +251,10 @@ export default async function AdminStaffPage() {
       </section>
 
       <section className="rounded-2xl border border-line bg-surface p-4">
-        <h2 className="font-extrabold">ייבוא סגל מקובץ CSV</h2>
+        <h2 className="font-extrabold">ייבוא צוות מקובץ CSV</h2>
         <p className="mt-1 text-sm text-muted">
           עמודות: <code dir="ltr">email</code>, <code dir="ltr">full_name</code>{" "}
-          (אופציונלי). שורה ראשונה = כותרות. אנשי סגל קיימים לא מושפעים.
+          (אופציונלי). שורה ראשונה = כותרות. אנשי צוות קיימים לא מושפעים.
         </p>
         <AdminCsvImport action={importStaffCsvAction} />
       </section>

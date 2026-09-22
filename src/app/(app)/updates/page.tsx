@@ -2,17 +2,19 @@ import { requireMe } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import UpdatesList, { type UpdateItem } from "@/components/updates/UpdatesList";
 
-export const metadata = { title: "עדכונים שלא נקראו" };
+export const metadata = { title: "עדכונים" };
 
 export default async function UpdatesPage() {
-  await requireMe();
   const supabase = await createClient();
 
   // all messages readable by the current staff member WITH their persisted
-  // per-user read state (client tabs filter all/unread/read)
-  const { data: rows, error } = await supabase.rpc("staff_message_updates", {
-    p_limit: 200,
-  });
+  // per-user read state (client tabs filter all/unread/read). The RPC is
+  // keyed by auth.uid() inside the database, so it runs together with the
+  // shared identity check; nothing is rendered before requireMe() passed.
+  const [, { data: rows, error }] = await Promise.all([
+    requireMe(),
+    supabase.rpc("staff_message_updates", { p_limit: 200 }),
+  ]);
   if (error) {
     console.error("[/updates] staff_message_updates failed:", error);
   }

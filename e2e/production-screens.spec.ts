@@ -46,14 +46,16 @@ test.beforeEach(async ({ page }) => {
 test.describe("desktop home major column", () => {
   test.use({ viewport: { width: 1366, height: 900 } });
 
-  test("a student with a major shows the major NAME in the desktop table", async ({ page }) => {
+  test("a student with a major shows the major NAME in the master desktop table", async ({ page }) => {
     const admin = db(); // lazy fail-closed client — only after hook skips passed
     const studentId = "44444444-4444-4444-4444-4444444444f1";
     const majorId = "d3333333-3333-3333-3333-3333333333f1";
-    // seed: student (broad viewer sees all non-archived) + major + project-less fallback
+    const MICHAL = "11111111-1111-1111-1111-111111111102";
+    // seed: student in מיכל's mentored group זית + master assignment for her,
+    // so her relationship-scoped MASTER table (with the major column) shows it
     await admin.from("students").delete().eq("id", studentId);
     await admin.from("majors").upsert({ id: majorId, name: "קולנוע בדיקות" });
-    const { data: group } = await admin.from("greenhouse_groups").select("id").limit(1);
+    const { data: group } = await admin.from("greenhouse_groups").select("id").eq("name", "קבוצת זית").limit(1);
     const ins = await admin.from("students").insert({
       id: studentId,
       first_name: "מגמה",
@@ -63,15 +65,24 @@ test.describe("desktop home major column", () => {
       is_archived: false,
     });
     if (ins.error) throw new Error("student seed failed: " + ins.error.message);
+    await admin.from("master_assignments").delete().eq("student_id", studentId).eq("staff_id", MICHAL);
+    const mas = await admin.from("master_assignments").insert({
+      student_id: studentId,
+      staff_id: MICHAL,
+    });
+    if (mas.error) throw new Error("master assignment seed failed: " + mas.error.message);
 
     try {
-      await login(page, USERS.admin); // super_admin → broad viewer → "כל החניכים" table
-      await expect(page.getByText("כל החניכים")).toBeVisible();
+      await login(page, USERS.mentor); // mentor + master → החניכים שלי with toggle
+      await expect(page.getByText("החניכים שלי", { exact: true })).toBeVisible();
+      // switch to the מאסטר view (the master table includes the major column)
+      await page.getByRole("tab", { name: "מאסטר" }).click();
       const row = page.getByRole("row").filter({ hasText: "מגמה בדיקה־דסקטופ" });
       await expect(row).toBeVisible();
       await expect(row).toContainText("קולנוע בדיקות"); // the major NAME is visible
       await logout(page);
     } finally {
+      await admin.from("master_assignments").delete().eq("student_id", studentId).eq("staff_id", MICHAL);
       await admin.from("students").delete().eq("id", studentId);
       await admin.from("majors").delete().eq("id", majorId);
     }
@@ -79,7 +90,7 @@ test.describe("desktop home major column", () => {
 });
 
 test.describe("project intake admin route", () => {
-  test("קבלת פרויקטים opens the intake page — no crash — and renders rows", async ({ page }) => {
+  test("הצהרת כוונות opens the intake page — no crash — and renders rows", async ({ page }) => {
     const admin = db(); // lazy fail-closed client — only after hook skips passed
     const windowId = "eeeeeeee-4444-4444-4444-444444444441";
     await admin.from("intake_windows").delete().eq("id", windowId);
@@ -99,7 +110,7 @@ test.describe("project intake admin route", () => {
       await login(page, USERS.admin);
       // navigate via links — dev-mode page.goto to a cold route can abort
       await page.getByRole("link", { name: "ניהול" }).click();
-      await page.getByRole("link", { name: "קבלת פרויקטים" }).click();
+      await page.getByRole("link", { name: "הצהרת כוונות" }).first().click(); // the admin shell tab AND the overview operational card share this label
       await expect(page.getByText("טפסי קבלה ציבוריים")).toBeVisible();
       // the seeded intake row renders with its actions (title also appears
       // in the CSV dropdown → scope to the row list item)
@@ -145,7 +156,7 @@ test.describe("intake link copy", () => {
   async function openIntakePage(page: import("@playwright/test").Page) {
     await login(page, USERS.admin);
     await page.getByRole("link", { name: "ניהול" }).click();
-    await page.getByRole("link", { name: "קבלת פרויקטים" }).click();
+    await page.getByRole("link", { name: "הצהרת כוונות" }).first().click(); // the admin shell tab AND the overview operational card share this label
     await expect(page.getByText("טפסי קבלה ציבוריים")).toBeVisible();
   }
 
@@ -179,13 +190,14 @@ test.describe("intake link copy", () => {
       await expect(row.getByText("הועתק ✓")).toBeVisible();
 
       const copied1 = await page.evaluate(() => navigator.clipboard.readText());
-      // 1. absolute URL on the CURRENT origin
-      expect(copied1.startsWith("http://localhost:3222/")).toBe(true);
+      // 1. absolute URL on the CURRENT origin (derived from the app under test)
+      const origin = new URL(page.url()).origin;
+      expect(copied1.startsWith(`${origin}/`)).toBe(true);
       // 2. correct public intake route + token
       expect(copied1).toContain("/intake/abc123-e2e-token");
       // 3. NOT just the token
       expect(copied1).not.toBe("abc123-e2e-token");
-      expect(copied1).toBe("http://localhost:3222/intake/abc123-e2e-token");
+      expect(copied1).toBe(`${origin}/intake/abc123-e2e-token`);
 
       // 4. repeated Copy Link → exactly the same complete URL
       await copyBtn.click();
@@ -242,7 +254,7 @@ test.describe("intake link copy", () => {
       expect(shown).toContain("/intake/");
       await modal.getByRole("button", { name: "העתקה" }).click();
       const copiedA = await page.evaluate(() => navigator.clipboard.readText());
-      expect(copiedA.startsWith("http://localhost:3222/")).toBe(true);
+      expect(copiedA.startsWith(`${new URL(page.url()).origin}/`)).toBe(true);
       expect(copiedA).toContain("/intake/");
       const newToken = copiedA.split("/intake/")[1];
       expect(newToken!.length).toBeGreaterThan(20);

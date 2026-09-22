@@ -52,6 +52,44 @@ function revalidateEmployment(studentId?: string | null) {
   revalidatePath("/");
 }
 
+// ------------------------------------------------------------- overrides ---
+
+/**
+ * Tri-state employment-eligibility override ('eligible' | 'ineligible' |
+ * 'automatic'). The canonical decision + audit live INSIDE
+ * admin_set_employment_override; this action only pre-checks the caller and
+ * View-As.
+ */
+export async function setEmploymentOverrideAction(
+  _prev: ActionState | null,
+  fd: FormData
+): Promise<EmploymentMutationResult> {
+  try {
+    const { allowed } = await requireEmploymentManager();
+    if (!allowed) return { ok: false, error: "אין הרשאה לניהול תעסוקה" };
+    if (!(await assertNotViewAs())) return { ok: false, error: "לא זמין במצב צפייה" };
+
+    const studentId = String(fd.get("studentId") ?? "");
+    const override = String(fd.get("override") ?? "");
+    if (!isUuid(studentId)) return { ok: false, error: "קלט לא תקין" };
+    if (!["eligible", "ineligible", "automatic"].includes(override)) {
+      return { ok: false, error: "קלט לא תקין" };
+    }
+
+    const supabase = await createClient();
+    const { error } = await supabase.rpc("admin_set_employment_override", {
+      p_student_id: studentId,
+      p_override: override,
+    });
+    if (error) return { ok: false, error: errMessage(error.message) };
+    revalidateEmployment(studentId);
+    return { ok: true };
+  } catch (err) {
+    if (err && typeof err === "object" && "digest" in err) throw err;
+    return { ok: false, error: "הפעולה נכשלה. נסו שוב." };
+  }
+}
+
 // ------------------------------------------------------------ placements ---
 
 export async function upsertEmploymentPlacementAction(

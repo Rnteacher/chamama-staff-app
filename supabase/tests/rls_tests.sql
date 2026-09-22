@@ -385,16 +385,16 @@ do $$ begin
   raise notice 'PASS: users cannot modify roles (even super_admin via client)';
 end $$;
 select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-11111111110a","role":"authenticated"}', true);
-do $$ begin
-  begin
-    update public.user_roles set role = 'leadership';
-    raise exception 'FAIL: staff modified roles';
-  exception when insufficient_privilege then null; end;
-  begin
-    delete from public.user_roles;
-    raise exception 'FAIL: staff deleted roles';
-  exception when insufficient_privilege then null; end;
-  raise notice 'PASS: staff cannot update or delete roles';
+do $$ declare v_cnt int; begin
+  -- RLS with no UPDATE policy silently affects ZERO rows (no error), so the
+  -- protection is asserted via row counts, not exceptions:
+  update public.user_roles set role = 'leadership';
+  get diagnostics v_cnt = row_count;
+  if v_cnt <> 0 then raise exception 'FAIL: staff modified roles'; end if;
+  delete from public.user_roles;
+  get diagnostics v_cnt = row_count;
+  if v_cnt <> 0 then raise exception 'FAIL: staff deleted roles'; end if;
+  raise notice 'PASS: staff cannot update or delete roles (zero rows touched)';
 end $$;
 rollback;
 
@@ -406,7 +406,7 @@ select set_config('role', 'postgres', true);
 update public.profiles set auth_user_id = id where email = 'tom@chamama.example';
 select set_config('role', 'authenticated', true);
 select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-11111111110a","role":"authenticated"}', true);
-do $$ begin
+do $$ declare v_cnt int; begin
   begin
     insert into public.group_mentors (group_id, staff_id)
     values ('22222222-2222-2222-2222-222222222201', '11111111-1111-1111-1111-11111111110a');
@@ -430,14 +430,13 @@ do $$ begin
     insert into public.profiles (email, is_active) values ('hacker@evil.com', true);
     raise exception 'FAIL: staff created a staff member';
   exception when insufficient_privilege then null; end;
-  begin
-    update public.students set is_archived = true;
-    raise exception 'FAIL: staff archived a student';
-  exception when insufficient_privilege then null; end;
-  begin
-    update public.profiles set is_active = false;
-    raise exception 'FAIL: staff deactivated a colleague';
-  exception when insufficient_privilege then null; end;
+  -- UPDATEs under RLS with no policy silently touch ZERO rows:
+  update public.students set is_archived = true;
+  get diagnostics v_cnt = row_count;
+  if v_cnt <> 0 then raise exception 'FAIL: staff archived a student'; end if;
+  update public.profiles set is_active = false;
+  get diagnostics v_cnt = row_count;
+  if v_cnt <> 0 then raise exception 'FAIL: staff deactivated a colleague'; end if;
   raise notice 'PASS: non-admin cannot alter staff/assignments/structure';
 end $$;
 rollback;
@@ -470,12 +469,12 @@ select set_config('role', 'authenticated', true);
 select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111102","role":"authenticated"}', true);
 update public.student_messages set is_general_visible = true where id = '55555555-5555-5555-5555-555555555502';
 do $$ begin
-  begin
-    perform 1 from public.audit_logs limit 1;
+  -- audit_logs RLS has NO policies → staff SELECT returns an EMPTY set
+  -- (silently), so the protection is asserted as "zero rows visible":
+  if exists (select 1 from public.audit_logs limit 1) then
     raise exception 'FAIL: audit logs readable by staff';
-  exception when insufficient_privilege then
-    raise notice 'PASS: audit logs not readable through RLS';
-  end;
+  end if;
+  raise notice 'PASS: audit logs not readable through RLS';
 end $$;
 commit;
 
@@ -835,30 +834,25 @@ do $$ declare v jsonb; begin
 end $$;
 rollback;
 
--- I5: anonymous has no table access at all (public flow is RPC-only)
+-- I5: anonymous has no table access at all (public flow is RPC-only).
+-- RLS with no anon policy returns EMPTY sets silently — assert zero rows.
 begin;
 select set_config('role', 'anon', true);
-do $$ declare v int;
+do $$ declare v bigint;
 begin
-  begin
-    select count(*) into v from public.intake_windows; raise exception 'FAIL: anon read intake_windows';
-  exception when insufficient_privilege then null; end;
-  begin
-    select count(*) into v from public.intake_submissions; raise exception 'FAIL: anon read intake_submissions';
-  exception when insufficient_privilege then null; end;
-  begin
-    select count(*) into v from public.student_projects; raise exception 'FAIL: anon read student_projects';
-  exception when insufficient_privilege then null; end;
-  begin
-    select count(*) into v from public.meeting_reports; raise exception 'FAIL: anon read meeting_reports';
-  exception when insufficient_privilege then null; end;
-  begin
-    select count(*) into v from public.students; raise exception 'FAIL: anon read students';
-  exception when insufficient_privilege then null; end;
-  begin
-    select count(*) into v from public.profiles; raise exception 'FAIL: anon read profiles';
-  exception when insufficient_privilege then null; end;
-  raise notice 'PASS: anonymous has no broad SELECT on internal tables';
+  select count(*) into v from public.intake_windows;
+  if v <> 0 then raise exception 'FAIL: anon read intake_windows'; end if;
+  select count(*) into v from public.intake_submissions;
+  if v <> 0 then raise exception 'FAIL: anon read intake_submissions'; end if;
+  select count(*) into v from public.student_projects;
+  if v <> 0 then raise exception 'FAIL: anon read student_projects'; end if;
+  select count(*) into v from public.meeting_reports;
+  if v <> 0 then raise exception 'FAIL: anon read meeting_reports'; end if;
+  select count(*) into v from public.students;
+  if v <> 0 then raise exception 'FAIL: anon read students'; end if;
+  select count(*) into v from public.profiles;
+  if v <> 0 then raise exception 'FAIL: anon read profiles'; end if;
+  raise notice 'PASS: anonymous has no broad SELECT on internal tables (empty sets)';
 end $$;
 rollback;
 
@@ -1222,7 +1216,14 @@ end $$;
 select set_config('role', 'authenticated', true);
 select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111102","role":"authenticated"}', true);
 do $$ declare v_count int; begin
-  select count(*) into v_count from public.my_reportable_occurrences('44444444-4444-4444-4444-444444444401');
+  -- scope to THIS test's fresh occurrence: the seeded weekly meeting may also
+  -- already be due (date-dependent), which is legitimate
+  select count(*) into v_count
+    from public.my_reportable_occurrences('44444444-4444-4444-4444-444444444401') r
+   where r.occurrence_id in (
+     select id from public.meeting_occurrences
+      where schedule_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+   );
   if v_count <> 1 then raise exception 'FAIL: reportable occurrences for michal = %', v_count; end if;
   raise notice 'PASS: due occurrences reportable by their owner';
 end $$;
@@ -1770,14 +1771,12 @@ do $$ begin
   raise notice 'PASS: anon + authenticated have EXECUTE on all five public intake RPCs';
 end $$;
 
--- X2: anon still cannot SELECT intake_windows directly (no table grant)
+-- X2: anon still cannot SELECT intake_windows directly (RLS: empty set)
 begin;
 select set_config('role', 'anon', true);
-do $$ declare v int; begin
-  begin
-    select count(*) into v from public.intake_windows;
-    raise exception 'FAIL: anon selected intake_windows';
-  exception when insufficient_privilege then null; end;
+do $$ declare v bigint; begin
+  select count(*) into v from public.intake_windows;
+  if v <> 0 then raise exception 'FAIL: anon selected intake_windows'; end if;
   raise notice 'PASS: anon still has no direct SELECT on intake_windows';
 end $$;
 rollback;
@@ -1805,14 +1804,13 @@ do $$ declare v int; begin
     values ('x', encode(sha256(convert_to('tok-x3-b','UTF8')),'hex'), now(), now(), '11111111-1111-1111-1111-11111111110a');
     raise exception 'FAIL: authenticated inserted an intake window';
   exception when insufficient_privilege then null; end;
-  begin
-    update public.intake_windows set is_revoked = true;
-    raise exception 'FAIL: authenticated updated an intake window';
-  exception when insufficient_privilege then null; end;
-  begin
-    delete from public.intake_submissions;
-    raise exception 'FAIL: authenticated deleted submissions';
-  exception when insufficient_privilege then null; end;
+  -- UPDATE/DELETE under RLS with no policy silently touch ZERO rows:
+  update public.intake_windows set is_revoked = true;
+  get diagnostics v = row_count;
+  if v <> 0 then raise exception 'FAIL: authenticated updated an intake window'; end if;
+  delete from public.intake_submissions;
+  get diagnostics v = row_count;
+  if v <> 0 then raise exception 'FAIL: authenticated deleted submissions'; end if;
   raise notice 'PASS: EXECUTE grant adds no direct table access for authenticated';
 end $$;
 rollback;
@@ -2133,19 +2131,16 @@ do $$ declare v_token text; v_res jsonb; begin
 end $$;
 rollback;
 
--- F7: anon/authenticated cannot select form tables directly (broad access)
+-- F7: anon/authenticated cannot select form tables directly (broad access).
+-- RLS with no policy returns EMPTY sets silently — assert zero rows.
 begin;
 select set_config('role', 'anon', true);
-do $$ declare v int; begin
-  begin
-    select count(*) into v from public.form_definitions;
-    raise exception 'FAIL: anon read form_definitions';
-  exception when insufficient_privilege then null; end;
-  begin
-    select count(*) into v from public.form_submissions;
-    raise exception 'FAIL: anon read form_submissions';
-  exception when insufficient_privilege then null; end;
-  raise notice 'PASS: anon cannot read form engine tables';
+do $$ declare v bigint; begin
+  select count(*) into v from public.form_definitions;
+  if v <> 0 then raise exception 'FAIL: anon read form_definitions'; end if;
+  select count(*) into v from public.form_submissions;
+  if v <> 0 then raise exception 'FAIL: anon read form_submissions'; end if;
+  raise notice 'PASS: anon cannot read form engine tables (empty sets)';
 end $$;
 rollback;
 

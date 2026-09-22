@@ -1,12 +1,12 @@
 ﻿import Link from "next/link";
-import { cookies } from "next/headers";
-import { requireMe, isPrivileged } from "@/lib/auth";
+import { requireMe } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
-import { timeAgo } from "@/lib/format";
 import { WEEKDAY_SHORT_LABELS, jerusalemParts } from "@/lib/meetings";
 import { ROLE_LABELS } from "@/lib/constants";
 import { getViewAsState } from "@/lib/view-as";
+import { getUnreadCounts } from "@/lib/unread";
 import { fetchStaffDay } from "@/lib/calendar";
+import { scopeHomeStudents } from "@/lib/home-students";
 import {
   isoDate,
   sortScheduleItems,
@@ -15,8 +15,8 @@ import {
   type ScheduleItem,
   type WeeklySlot,
 } from "@/lib/schedule";
-import StudentRow, { type StudentRowData } from "@/components/StudentRow";
-import StudentDataTable, { type StudentTableRow } from "@/components/tables/StudentDataTable";
+import HomeStudentsPanel from "@/components/home/HomeStudentsPanel";
+import StudentDataTable from "@/components/tables/StudentDataTable";
 import EmptyState from "@/components/EmptyState";
 
 export interface DashboardRow {
@@ -48,130 +48,128 @@ export interface DashboardRow {
   broad_viewer: boolean;
 }
 
-const STATUS_LABELS: Record<string, string> = { green: "ירוק", yellow: "צהוב", red: "אדום" };
-const STATUS_STYLES: Record<string, string> = {
-  green: "bg-emerald-100 text-emerald-800 border-emerald-300",
-  yellow: "bg-amber-100 text-amber-800 border-amber-300",
-  red: "bg-red-100 text-red-800 border-red-300",
-};
-
 export default async function HomePage() {
-  const me = await requireMe();
   const supabase = await createClient();
-  const viewAs = await getViewAsState();
+  const jp = jerusalemParts(new Date());
+  const todayISO = isoDate(jp.year, jp.month, jp.day);
+
+  // ---- wave 1: nothing here depends on who the caller is beyond the
+  // session itself (RLS-scoped reads), so it starts together with the shared
+  // identity / View-As / unread lookups instead of after them. Nothing is
+  // rendered before requireMe() below has passed.
+  const unreadP = getUnreadCounts();
+  const listsP = Promise.all([
+    supabase
+      .from("students")
+      .select("id, first_name, last_name, group_id, major_id, greenhouse_groups(name), majors(name)")
+      .eq("is_archived", false),
+    supabase.from("greenhouse_groups").select("id, name"),
+    supabase.from("majors").select("id, name"),
+    supabase.rpc("learning_groups_on_weekday", { p_weekday: jp.weekday }),
+  ]);
+  const [me, viewAs] = await Promise.all([requireMe(), getViewAsState()]);
 
   // when View-As is active, use the target staff + context for scoping
   const useViewAs = Boolean(viewAs.active && viewAs.staffId && viewAs.roleContext);
-  const dashRes = useViewAs
-    ? await supabase.rpc("dashboard_rows_view_as", {
-        p_target_staff_id: viewAs.staffId!,
-        p_context: viewAs.roleContext!,
-      })
-    : await supabase.rpc("dashboard_rows");
 
-  const [unreadRes, myStudentsRes, studentsRes, groupsRes, majorsRes, unreadCountsRes] =
-    await Promise.all([
-      supabase.rpc("unread_messages", { p_limit: 6, p_offset: 0 }),
-      supabase.rpc("my_students"),
-      supabase
-        .from("students")
-        .select("id, first_name, last_name, group_id, major_id, greenhouse_groups(name), majors(name)")
-        .eq("is_archived", false),
-      supabase.from("greenhouse_groups").select("id, name"),
-      supabase.from("majors").select("id, name"),
-      supabase.rpc("student_unread_counts"),
-    ]);
+  // canonical relationships decide the Home student lists (NEVER the role
+  // list): the real user's group_mentors / master_assignments arrive with
+  // the identity (current_staff_context). View-As never renders these lists.
+  const mentoredGroupIds = new Set(useViewAs ? [] : me.mentorGroupIds);
+  const masteredStudentIds = new Set(useViewAs ? [] : me.masterStudentIds);
 
-  const unreadRows = (unreadRes.data ?? []) as Array<{
-    message_id: string;
-    student_id: string;
-    student_first_name: string;
-    student_last_name: string;
-    author_name: string | null;
-    body: string;
-    created_at: string;
-  }>;
+  // The relationship dashboard is only DISPLAYED for mentor/master rows (or
+  // the View-As role table) — skip the RPC for everyone else.
+  const needsDashboard = useViewAs
+    ? viewAs.roleContext !== "staff"
+    : mentoredGroupIds.size > 0 || masteredStudentIds.size > 0;
 
-  const unreadByStudent = new Map<string, number>();
-  for (const row of unreadCountsRes.data ?? []) {
-    unreadByStudent.set(row.student_id, Number(row.unread_count));
-  }
-
-  const studentById = new Map<string, StudentRowData>();
-  for (const s of studentsRes.data ?? []) {
-    const row = s as unknown as {
-      id: string; first_name: string; last_name: string;
-      greenhouse_groups: { name: string } | null; majors: { name: string } | null;
-    };
-    studentById.set(row.id, {
-      id: row.id, firstName: row.first_name, lastName: row.last_name,
-      groupName: row.greenhouse_groups?.name ?? null, majorName: row.majors?.name ?? null,
-      unread: unreadByStudent.get(row.id) ?? 0,
-    });
-  }
-
-  const myStudentIds = new Set<string>(
-    ((myStudentsRes.data ?? []) as Array<{ id: string }>).map((s) => s.id)
-  );
-  const myStudents = [...myStudentIds]
-    .map((id) => studentById.get(id))
-    .filter((s): s is StudentRowData => Boolean(s))
-    .sort((a, b) => b.unread - a.unread);
-
-  // ------------------------- היום שלי + קבוצות למידה היום (unified day) -----
-  const jp = jerusalemParts(new Date());
-  const todayISO = isoDate(jp.year, jp.month, jp.day);
+  // ---- wave 2: everything keyed by the resolved staff member, in parallel
   const scheduleStaffId = useViewAs ? viewAs.staffId! : me.staffId;
-  const [myDayRes, lgTodayRes, myLgRes] = await Promise.all([
+  // ONLY actual home-group mentors get school-attendance cards (View-As stays
+  // read-only and never shows them).
+  const attendanceGroupIds = useViewAs ? [] : me.mentorGroupIds;
+  const [dashRes, myDayRes, myLgRes, attendanceCounts] = await Promise.all([
+    needsDashboard
+      ? useViewAs
+        ? supabase.rpc("dashboard_rows_view_as", {
+            p_target_staff_id: viewAs.staffId!,
+            p_context: viewAs.roleContext!,
+          })
+        : supabase.rpc("dashboard_rows")
+      : Promise.resolve({ data: [] as DashboardRow[] }),
     scheduleStaffId
       ? fetchStaffDay(supabase, scheduleStaffId, todayISO)
       : Promise.resolve([]),
-    supabase.rpc("learning_groups_on_weekday", { p_weekday: jp.weekday }),
     scheduleStaffId
       ? supabase.rpc("staff_learning_groups_on_weekday", {
           p_staff_id: scheduleStaffId,
           p_weekday: jp.weekday,
         })
       : Promise.resolve({ data: [] as never[] }),
+    Promise.all(
+      attendanceGroupIds.map(async (groupId) => {
+        const { data } = await supabase.rpc("school_attendance_counts", {
+          p_group_id: groupId,
+          p_date: todayISO,
+        });
+        return [
+          groupId,
+          (data ?? {}) as { resolved: number; total: number; absent: number; late: number },
+        ] as const;
+      })
+    ),
   ]);
-  const myDay = sortScheduleItems(myDayRes);
+  const [[studentsRes, groupsRes, majorsRes, lgTodayRes], unreadByStudent] =
+    await Promise.all([listsP, unreadP]);
 
-  // ------------------------------------------------ נוכחות קבוצת האם -------
-  // mentors (and leadership via the overview link) get today's completion
-  // counts per writable group; ordinary staff see nothing they cannot use.
-  const isBroad = me.roles.includes("leadership") || me.roles.includes("super_admin");
-  interface MentoredGroup { id: string; name: string }
-  let attendanceGroups: MentoredGroup[] = [];
-  if (!useViewAs) {
-    if (isBroad) {
-      const { data: allGroups } = await supabase.from("greenhouse_groups").select("id, name").order("name");
-      attendanceGroups = (allGroups ?? []) as MentoredGroup[];
-    } else if (me.staffId) {
-      const { data: mentored } = await supabase
-        .from("group_mentors")
-        .select("group_id, greenhouse_groups(id, name)")
-        .eq("staff_id", me.staffId);
-      attendanceGroups = ((mentored ?? []) as unknown as Array<{
-        group_id: string; greenhouse_groups: MentoredGroup | null;
-      }>)
-        .map((r) => r.greenhouse_groups)
-        .filter((g): g is MentoredGroup => Boolean(g));
+  interface StudentBasic {
+    id: string;
+    firstName: string;
+    lastName: string;
+    groupId: string | null;
+    groupName: string | null;
+    majorName: string | null;
+    unread: number;
+  }
+  const studentById = new Map<string, StudentBasic>();
+  for (const s of studentsRes.data ?? []) {
+    const row = s as unknown as {
+      id: string; first_name: string; last_name: string; group_id: string | null;
+      greenhouse_groups: { name: string } | null; majors: { name: string } | null;
+    };
+    studentById.set(row.id, {
+      id: row.id, firstName: row.first_name, lastName: row.last_name,
+      groupId: row.group_id,
+      groupName: row.greenhouse_groups?.name ?? null, majorName: row.majors?.name ?? null,
+      unread: unreadByStudent.get(row.id) ?? 0,
+    });
+  }
+
+  // students of the home groups this person actually mentors
+  const mentoredStudentIds = new Set<string>();
+  for (const s of studentById.values()) {
+    if (s.groupId && mentoredGroupIds.has(s.groupId)) {
+      mentoredStudentIds.add(s.id);
     }
   }
-  const attendanceCountsByGroup = new Map<
-    string,
-    { resolved: number; total: number; absent: number; late: number }
-  >();
-  await Promise.all(
-    attendanceGroups.map(async (g) => {
-      const { data } = await supabase.rpc("school_attendance_counts", {
-        p_group_id: g.id,
-        p_date: todayISO,
-      });
-      const c = (data ?? {}) as { resolved: number; total: number; absent: number; late: number };
-      attendanceCountsByGroup.set(g.id, c);
-    })
+
+  // ------------------------- היום שלי + קבוצות למידה היום (unified day) -----
+  const myDay = sortScheduleItems(myDayRes);
+
+  // ------------------------------------------------ נוכחות (mentor-only) ---
+  // ONLY actual home-group mentors get school-attendance cards, and only for
+  // the group(s) they mentor. No other role (coordinator, master, major head,
+  // super_admin…) receives school-attendance cards — leadership reaches the
+  // overview through the navigation instead. View-As stays read-only.
+  interface MentoredGroup { id: string; name: string }
+  const groupNameById = new Map(
+    ((groupsRes.data ?? []) as MentoredGroup[]).map((g) => [g.id, g.name])
   );
+  const attendanceGroups: MentoredGroup[] = attendanceGroupIds
+    .filter((id) => groupNameById.has(id))
+    .map((id) => ({ id, name: groupNameById.get(id)! }));
+  const attendanceCountsByGroup = new Map(attendanceCounts);
 
   // LG sessions THIS staff member leads today (attendance entry point)
   const myLgSessions = ((myLgRes.data ?? []) as unknown as Array<{
@@ -214,32 +212,38 @@ export default async function HomePage() {
     unread: [...studentById.values()].filter((s) => s.majorName === m.name).reduce((sum, s) => sum + s.unread, 0),
   }));
 
-  const totalUnread = [...unreadByStudent.values()].reduce((a, b) => a + b, 0);
-  const privileged = isPrivileged(me);
   const isCalendarAdmin = me.roles.includes("leadership") || me.roles.includes("super_admin");
-  const roleChips = me.roles.map((r) => ROLE_LABELS[r]).join(" · ");
+  // functional roles only — the implicit base "staff" identity is not a role chip
+  const functionalRoles = me.roles.filter((r) => r !== "staff");
+  const roleChips = functionalRoles.map((r) => ROLE_LABELS[r]).join(" · ");
 
-  // dashboard rows — View-As rows have no flag columns
+  // relationship-scoped student lists (mentor / master)
   const dashRows = ((dashRes.data ?? []) as DashboardRow[]);
-  const groupRows = dashRows.filter((r) => r.in_my_groups !== false);
-  const masterRows = dashRows.filter((r) => r.master_assigned !== false);
-  const majorRows = dashRows.filter((r) => r.in_my_majors !== false);
-  const broadRows = dashRows.filter((r) => r.broad_viewer !== false);
-
-  const useViewAsDash = useViewAs && viewAs.roleContext !== "staff";
+  const scoped = scopeHomeStudents(dashRows, mentoredStudentIds, masteredStudentIds);
+  const toMobile = (rows: DashboardRow[]) =>
+    rows
+      .map((r) => {
+        const s = studentById.get(r.student_id);
+        return s
+          ? {
+              id: s.id, firstName: s.firstName, lastName: s.lastName,
+              groupName: s.groupName, majorName: s.majorName, unread: s.unread,
+            }
+          : null;
+      })
+      .filter((s): s is NonNullable<typeof s> => Boolean(s));
 
   return (
     <div className="flex flex-col gap-6">
       <section>
         <h1 className="text-xl font-extrabold">שלום {me.fullName ?? "צוות"}</h1>
-        <p className="mt-1 text-sm text-muted">{roleChips}</p>
+        {roleChips && <p className="mt-1 text-sm text-muted">{roleChips}</p>}
       </section>
 
-      {/* mobile-only global search entry — on desktop the student table has
-          its own search/filter toolbar (exactly one student search) */}
+      {/* one global student search — every authenticated staff member, every viewport */}
       <Link
         href="/search"
-        className="flex min-h-[52px] items-center gap-3 rounded-2xl border border-line bg-surface px-4 py-3 text-muted hover:bg-brand-soft/40 lg:hidden"
+        className="flex min-h-[52px] items-center gap-3 rounded-2xl border border-line bg-surface px-4 py-3 text-muted hover:bg-brand-soft/40"
       >
         <SearchGlyph />
         <span>חיפוש חניך…</span>
@@ -256,7 +260,7 @@ export default async function HomePage() {
               staff see their events here and in the daily schedule, without a
               management-calendar entry */}
           {isCalendarAdmin && (
-            <Link href="/calendar" className="text-sm font-medium text-muted hover:text-ink">
+            <Link href="/calendar" prefetch={false} className="text-sm font-medium text-muted hover:text-ink">
               לוח שנה ›
             </Link>
           )}
@@ -286,7 +290,7 @@ export default async function HomePage() {
         )}
       </section>
 
-      {/* -------------------------------------- נוכחות (fast daily entry) */}
+      {/* -------------------------------------- נוכחות (mentor-only entry) */}
       {!useViewAs && (attendanceGroups.length > 0 || myLgSessions.length > 0) && (
         <section aria-labelledby="attendance-heading">
           <div className="mb-2 flex items-center justify-between">
@@ -294,7 +298,7 @@ export default async function HomePage() {
               נוכחות היום
             </h2>
             {isCalendarAdmin && (
-              <Link href="/attendance/overview" className="text-sm font-medium text-muted hover:text-ink">
+              <Link href="/attendance/overview" prefetch={false} className="text-sm font-medium text-muted hover:text-ink">
                 סקירת כל הקבוצות ›
               </Link>
             )}
@@ -310,7 +314,7 @@ export default async function HomePage() {
                   >
                     <span className="min-w-0">
                       <span className="block text-base font-extrabold">
-                        נוכחות קבוצת האם · {g.name}
+                        נוכחות הקבוצה · {g.name}
                       </span>
                       {c && (
                         <span className="block truncate text-xs font-semibold text-ink/80">
@@ -365,7 +369,7 @@ export default async function HomePage() {
               return (
                 <li key={`${g.id}-${g.slot.startTime}`} className="flex items-stretch gap-2">
                   <Link
-                    href={`/groups/learning/${g.id}`}
+                    href={`/groups/learning/${g.id}`} prefetch={false}
                     className="flex min-h-[56px] flex-1 items-center justify-between gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40"
                   >
                     <span className="min-w-0">
@@ -399,65 +403,19 @@ export default async function HomePage() {
         )}
       </section>
 
-      {/* עדכונים — renders ABOVE the student table on desktop */}
-      <section aria-labelledby="unread-heading">
-        <div className="mb-2 flex items-center justify-between">
-          <h2 id="unread-heading" className="font-extrabold">
-            עדכונים שלא נקראו
-            {totalUnread > 0 && (
-              <span className="mr-2 rounded-full bg-brand px-2 py-0.5 text-xs font-extrabold text-ink">{totalUnread}</span>
-            )}
-          </h2>
-          <Link href="/updates" className="text-sm font-medium text-muted hover:text-ink">הכל ›</Link>
-        </div>
-        {unreadRows.length === 0 ? (
-          <EmptyState title="הכל נקרא" description="אין עדכונים חדשים. כשיתקבל עדכון רלוונטי הוא יופיע כאן." />
-        ) : (
-          <ul className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {unreadRows.map((row) => (
-              <li key={row.message_id}>
-                <Link href={`/students/${row.student_id}?m=${row.message_id}`}
-                  className="flex h-full items-start gap-3 rounded-2xl border border-line bg-surface px-4 py-3 hover:bg-brand-soft/40">
-                  <span aria-hidden="true" className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-dark" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block font-bold">{row.student_first_name} {row.student_last_name}</span>
-                    <span className="block truncate text-sm text-muted">{row.body}</span>
-                    <span className="mt-0.5 block text-xs text-muted">{row.author_name ?? "צוות"} · {timeAgo(row.created_at)}</span>
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {/* ------------------------- החניכים שלי (mentor / master only) ----- */}
+      {!useViewAs && (
+        <HomeStudentsPanel
+          mentorRows={scoped.mentorRows}
+          masterRows={scoped.masterRows}
+          mentorMobile={toMobile(scoped.mentorRows)}
+          masterMobile={toMobile(scoped.masterRows)}
+        />
+      )}
 
-      {/* desktop dashboards with sorting/filtering/search — below עדכונים */}
-      {!useViewAsDash && broadRows.length > 0 ? (
-        <div className="hidden flex-col gap-6 lg:flex">
-          <StudentDataTable title="כל החניכים" rows={broadRows}
-            columns={["student_name","group_name","project_major_name","primary_master_name","status","last_report_at","intervention","mentor_next_meeting_at","master_next_meeting_at"]} readOnly={useViewAs} />
-        </div>
-      ) : !useViewAsDash ? (
-        <div className="hidden flex-col gap-6 lg:flex">
-          {groupRows.length > 0 && (
-            <StudentDataTable title="החניכים שלי · מנטור" rows={groupRows}
-              columns={["student_name","group_name","status","last_report_at","intervention","mentor_next_meeting_at"]} readOnly={useViewAs} />
-          )}
-          {masterRows.length > 0 && (
-            <StudentDataTable title="החניכים שלי · מאסטר" rows={masterRows}
-              columns={["student_name","group_name","project_major_name","primary_master_name","status","last_report_at","intervention","master_next_meeting_at"]} readOnly={useViewAs} />
-          )}
-          {majorRows.length > 0 && (
-            <StudentDataTable title="החניכים שלי · ראש/י מגמה" rows={majorRows}
-              columns={["student_name","group_name","project_major_name","primary_master_name","status","last_report_at","intervention"]} readOnly={useViewAs} />
-          )}
-          {groupRows.length + masterRows.length + majorRows.length === 0 && (
-            <EmptyState title="לוח הדשבורד יתמלא עם השיוכים שלכם"
-              description="כשתשויכו כמנטור/ית, מאסטר/ית או ראש/ית מגמה — החניכים הרלוונטיים יופיעו כאן." />
-          )}
-        </div>
-      ) : useViewAsDash ? (
-        <div className="flex flex-col gap-6">
+      {/* View-As: a read-only context dashboard (never the real person's lists) */}
+      {useViewAs && (
+        <section aria-labelledby="my-students-heading">
           {viewAs.roleContext === "staff" ? (
             <EmptyState title="תצוגת צוות כללי"
               description="צופה כאיש/אשת צוות רגיל — ללא דשבורד תפקידי." />
@@ -469,34 +427,18 @@ export default async function HomePage() {
               readOnly={true}
             />
           )}
-        </div>
-      ) : null}
-
-      <section aria-labelledby="my-students-heading" className="lg:hidden">
-        <h2 id="my-students-heading" className="mb-2 font-extrabold">החניכים שלי</h2>
-        {myStudents.length === 0 ? (
-          <EmptyState title={privileged ? "גישה לכל החניכים" : "אין חניכים משויכים"}
-            description={privileged ? "בתור צוות מוביל יש לכם גישה לכל החניכים — חפשו חניך או עברו דרך הקבוצות."
-              : "חניכים יופיעו כאן לפי השתייכותכם כמנטור, מאסטר או ראש מגמה. תמיד אפשר לחפש כל חניך."} />
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {myStudents.slice(0, 8).map((s) => <StudentRow key={s.id} student={s} showGroup />)}
-          </ul>
-        )}
-        {myStudents.length > 8 && (
-          <p className="mt-2 text-sm text-muted">ועוד {myStudents.length - 8} חניכים — השתמשו בחיפוש או בקבוצות.</p>
-        )}
-      </section>
+        </section>
+      )}
 
       <section aria-labelledby="groups-heading">
         <div className="mb-2 flex items-center justify-between">
           <h2 id="groups-heading" className="font-extrabold">קבוצות</h2>
-          <Link href="/groups" className="text-sm font-medium text-muted hover:text-ink">הכל ›</Link>
+          <Link href="/groups" prefetch={false} className="text-sm font-medium text-muted hover:text-ink">הכל ›</Link>
         </div>
         <ul className="flex flex-wrap gap-2">
           {groups.slice(0, 8).map((g) => (
             <li key={g.id}>
-              <Link href={`/groups/${g.id}`}
+              <Link href={`/groups/${g.id}`} prefetch={false}
                 className="flex items-center gap-2 rounded-full border border-line bg-surface px-4 py-2.5 font-medium hover:bg-brand-soft/40">
                 {g.name}
                 {g.unread > 0 && <span className="rounded-full bg-brand px-2 text-xs font-extrabold text-ink">{g.unread}</span>}
@@ -509,12 +451,12 @@ export default async function HomePage() {
       <section aria-labelledby="majors-heading">
         <div className="mb-2 flex items-center justify-between">
           <h2 id="majors-heading" className="font-extrabold">מגמות</h2>
-          <Link href="/majors" className="text-sm font-medium text-muted hover:text-ink">הכל ›</Link>
+          <Link href="/majors" prefetch={false} className="text-sm font-medium text-muted hover:text-ink">הכל ›</Link>
         </div>
         <ul className="flex flex-wrap gap-2">
           {majors.map((m) => (
             <li key={m.id}>
-              <Link href={`/majors/${m.id}`}
+              <Link href={`/majors/${m.id}`} prefetch={false}
                 className="flex items-center gap-2 rounded-full border border-line bg-surface px-4 py-2.5 font-medium hover:bg-brand-soft/40">
                 {m.name}
                 {m.unread > 0 && <span className="rounded-full bg-brand px-2 text-xs font-extrabold text-ink">{m.unread}</span>}
@@ -587,7 +529,7 @@ function DayItemLink({ item, current }: { item: ScheduleItem; current: boolean }
   }`;
 
   return item.linkPath ? (
-    <Link href={item.linkPath} className={cls}>
+    <Link href={item.linkPath} prefetch={false} className={cls}>
       {inner}
     </Link>
   ) : (

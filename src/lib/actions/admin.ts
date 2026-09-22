@@ -236,7 +236,7 @@ export async function importStaffCsvAction(
       ok: true,
       error:
         errors.length > 0
-          ? `נוספו ${added} אנשי סגל. נכשלו: ${errors.join(", ")}`
+          ? `נוספו ${added} אנשי צוות. נכשלו: ${errors.join(", ")}`
           : undefined,
     };
   });

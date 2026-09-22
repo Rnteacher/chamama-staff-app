@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireMe, hasRole } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { buildCsv, csvWithBom } from "@/lib/csv-export";
+import { parseIntakeExportFilters } from "@/lib/intake-export";
 import { assertNotViewAs } from "@/lib/view-as";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +29,9 @@ export async function GET(request: Request) {
       { status: 400 }
     );
   }
+  // group + major filters compose with the selected intake — enforced HERE,
+  // server-side (the browser controls are only a convenience)
+  const filters = parseIntakeExportFilters(searchParams);
 
   const supabase = await createClient();
 
@@ -45,15 +49,23 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
-  // submissions belonging ONLY to the selected intake
-  const { data: submissions, error } = await supabase
+  // submissions belonging ONLY to the selected intake (+ group/major filters)
+  let query = supabase
     .from("intake_submissions")
     .select(
-      "id, intent_text, updated_at, students(id, first_name, last_name, greenhouse_groups(name)), majors(name), " +
+      "id, intent_text, updated_at, students(id, first_name, last_name, group_id, greenhouse_groups(name)), majors(name), " +
       "assigned:profiles!intake_submissions_assigned_master_staff_id_fkey(full_name)"
     )
-    .eq("intake_id", intakeId)
-    .order("updated_at", { ascending: false });
+    .eq("intake_id", intakeId);
+  if (filters.groupId) {
+    query = query.eq("students.group_id", filters.groupId);
+  }
+  if (filters.majorId) {
+    query = query.eq("major_id", filters.majorId);
+  }
+  const { data: submissions, error } = await query.order("updated_at", {
+    ascending: false,
+  });
   if (error || !submissions) {
     return NextResponse.json({ error: "query failed" }, { status: 500 });
   }
