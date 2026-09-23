@@ -9,9 +9,17 @@ import {
   moderateMessageSchema,
   editMessageSchema,
   markMessagesReadSchema,
+  uuidSchema,
 } from "@/lib/validation";
 import { sendPushToUsers } from "@/lib/push/send";
 import { assertNotViewAs } from "@/lib/view-as";
+import { fetchUpdatesPage, parseUpdatesFilter } from "@/lib/updates";
+import type { UpdateItem, UpdatesCursor } from "@/lib/updates-types";
+
+const updatesCursorSchema = z.object({
+  createdAt: z.string().min(1).max(64),
+  id: uuidSchema,
+});
 
 export type ActionState = { ok: true } | { ok: false; error: string };
 
@@ -289,6 +297,42 @@ export async function markMessagesUnreadAction(
 
   await revalidateMessagePaths(parsed.data.messageIds);
   return { ok: true };
+}
+
+/**
+ * "סמן הכל כנקרא" on /updates: marks EVERY unread update of the current
+ * staff member read — the whole canonical unread set in the database, not
+ * only the page loaded in the browser.
+ */
+export async function markAllUpdatesReadAction(): Promise<ActionState> {
+  const me = await requireMe();
+  if (!me.staffId) return { ok: false, error: errorMessage() };
+  if (!(await assertNotViewAs())) {
+    return { ok: false, error: "לא זמין במצב צפייה" };
+  }
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("staff_mark_all_updates_read");
+  if (error) return { ok: false, error: errorMessage() };
+  revalidatePath("/updates");
+  revalidatePath("/");
+  revalidatePath("/students/[id]", "page");
+  return { ok: true };
+}
+
+/** Next /updates page for a filter, after the given keyset cursor. */
+export async function loadUpdatesPageAction(input: {
+  filter: string;
+  cursor: { createdAt: string; id: string };
+}): Promise<
+  | { ok: true; items: UpdateItem[]; nextCursor: UpdatesCursor | null }
+  | { ok: false; error: string }
+> {
+  const cursor = updatesCursorSchema.safeParse(input?.cursor);
+  if (!cursor.success) return { ok: false, error: "קלט לא תקין" };
+  await requireMe();
+  const page = await fetchUpdatesPage(parseUpdatesFilter(input.filter), cursor.data);
+  if (page.error) return { ok: false, error: errorMessage() };
+  return { ok: true, items: page.items, nextCursor: page.nextCursor };
 }
 
 /** Mark every message currently visible to me on this student as read. */

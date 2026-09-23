@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   computeEmploymentProgress,
+  employmentApplies,
   formatHoursLabel,
   formatWorkSlotsHe,
   type EmploymentOverviewData,
@@ -13,6 +14,10 @@ import EmploymentOverrideControl from "@/components/employment/EmploymentOverrid
  * Contact details are NOT rendered here (kept off broad surfaces).
  * Authorized employment managers also get the tri-state eligibility
  * override here — eligibility is operational logic, not a label.
+ *
+ * When employment does not apply to the student (effectively ineligible and
+ * no existing records) the section is not rendered at all — for every
+ * viewer. Managers enable it from the student header ("הוספה לתעסוקה").
  */
 export default function StudentEmploymentCard({
   data,
@@ -23,6 +28,7 @@ export default function StudentEmploymentCard({
   studentId: string;
   canManageOverride?: boolean;
 }) {
+  if (!employmentApplies(data)) return null;
   const p = computeEmploymentProgress(data.total_minutes);
 
   return (
@@ -46,13 +52,12 @@ export default function StudentEmploymentCard({
         />
       )}
 
-      {!data.eligible ? (
-        <p className="mt-2 text-sm text-muted">
-          {data.cohort_note
-            ? `${data.cohort_note}.`
-            : "החניך/ה נמצא/ת בקבוצת השנתון הצעירה — התוכנית התעסוקתית תחול בשנתון הבא."}
-        </p>
-      ) : !data.placement ? (
+      {!data.eligible && (
+        // existing records stay reachable after eligibility was withdrawn
+        <p className="mt-2 text-sm text-muted">לא משתתף/ת כרגע בתוכנית התעסוקה.</p>
+      )}
+
+      {!data.placement ? (
         <p className="mt-2 text-sm text-muted">אין שיבוץ לעבודה.</p>
       ) : (
         <>

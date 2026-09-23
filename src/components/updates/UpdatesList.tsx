@@ -2,40 +2,57 @@
 
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
+  loadUpdatesPageAction,
+  markAllUpdatesReadAction,
   markMessagesReadAction,
   markMessagesUnreadAction,
 } from "@/lib/actions/messages";
 import { timeAgo } from "@/lib/format";
+import type {
+  UpdateItem,
+  UpdatesCursor,
+  UpdatesFilter,
+} from "@/lib/updates-types";
 
-export interface UpdateItem {
-  message_id: string;
-  student_id: string;
-  student_first_name: string;
-  student_last_name: string;
-  author_name: string | null;
-  body: string;
-  created_at: string;
-  read: boolean;
-}
+export type { UpdateItem } from "@/lib/updates-types";
 
-type Tab = "all" | "unread" | "read";
-
-const TABS: { key: Tab; label: string }[] = [
+const TABS: { key: UpdatesFilter; label: string }[] = [
   { key: "all", label: "הכל" },
   { key: "unread", label: "לא נקראו" },
   { key: "read", label: "נקראו" },
 ];
 
-export default function UpdatesList({ items }: { items: UpdateItem[] }) {
+/**
+ * /updates list. Filtering and paging are server-side: each tab loads its
+ * own first page (?filter=), "טען עוד" fetches the next keyset page, and
+ * "סמן הכל כנקרא" marks the whole unread set in the database. The unread
+ * total is the canonical count (same as the nav badge), not the loaded rows.
+ */
+export default function UpdatesList({
+  filter,
+  initialItems,
+  initialCursor,
+  totalUnread,
+}: {
+  filter: UpdatesFilter;
+  initialItems: UpdateItem[];
+  initialCursor: UpdatesCursor | null;
+  totalUnread: number;
+}) {
   const router = useRouter();
-  const [tab, setTab] = useState<Tab>("all");
+  const pathname = usePathname();
+  const tab = filter;
+  const [items, setItems] = useState<UpdateItem[]>(initialItems);
+  const [cursor, setCursor] = useState<UpdatesCursor | null>(initialCursor);
   const [readMap, setReadMap] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(items.map((i) => [i.message_id, i.read]))
+    Object.fromEntries(initialItems.map((i) => [i.message_id, i.read]))
   );
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [loadingMore, startLoadMore] = useTransition();
+  const [switching, startSwitch] = useTransition();
 
   const setRead = (id: string, value: boolean) => {
     const prev = readMap[id] ?? true;
@@ -54,10 +71,36 @@ export default function UpdatesList({ items }: { items: UpdateItem[] }) {
     });
   };
 
-  const unreadIds = useMemo(
-    () => items.filter((i) => !(readMap[i.message_id] ?? true)).map((i) => i.message_id),
-    [items, readMap]
-  );
+  const loadMore = () => {
+    if (!cursor) return;
+    startLoadMore(async () => {
+      const res = await loadUpdatesPageAction({ filter, cursor });
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setError(null);
+      setItems((prev) => {
+        const seen = new Set(prev.map((i) => i.message_id));
+        return [...prev, ...res.items.filter((i) => !seen.has(i.message_id))];
+      });
+      setReadMap((prev) => {
+        const next = { ...prev };
+        for (const i of res.items) if (!(i.message_id in next)) next[i.message_id] = i.read;
+        return next;
+      });
+      setCursor(res.nextCursor);
+    });
+  };
+
+  const selectTab = (key: UpdatesFilter) => {
+    if (key === tab) return;
+    startSwitch(() => {
+      router.replace(key === "all" ? pathname : `${pathname}?filter=${key}`, {
+        scroll: false,
+      });
+    });
+  };
 
   const visible = useMemo(() => {
     if (tab === "all") return items;
@@ -65,7 +108,7 @@ export default function UpdatesList({ items }: { items: UpdateItem[] }) {
     return items.filter((i) => readMap[i.message_id] ?? true);
   }, [items, tab, readMap]);
 
-  const unreadCount = unreadIds.length;
+  const unreadCount = totalUnread;
 
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
@@ -77,9 +120,12 @@ export default function UpdatesList({ items }: { items: UpdateItem[] }) {
             disabled={pending}
             onClick={() =>
               startTransition(async () => {
-                const res = await markMessagesReadAction({ messageIds: unreadIds });
+                const res = await markAllUpdatesReadAction();
                 if (res.ok) {
                   setReadMap(Object.fromEntries(items.map((i) => [i.message_id, true])));
+                  // nothing unread is left to page through
+                  if (tab === "unread") setCursor(null);
+                  setError(null);
                   router.refresh();
                 } else setError(res.error);
               })
@@ -97,7 +143,8 @@ export default function UpdatesList({ items }: { items: UpdateItem[] }) {
             key={t.key}
             type="button"
             aria-pressed={tab === t.key}
-            onClick={() => setTab(t.key)}
+            disabled={switching}
+            onClick={() => selectTab(t.key)}
             className={`rounded-full border px-4 py-1.5 text-sm font-bold transition-colors ${
               tab === t.key
                 ? "border-brand-dark bg-brand-soft text-ink"
@@ -116,7 +163,7 @@ export default function UpdatesList({ items }: { items: UpdateItem[] }) {
 
       {error && <p role="alert" className="text-sm font-semibold text-danger">{error}</p>}
 
-      {visible.length === 0 ? (
+      {visible.length === 0 && !cursor ? (
         <p className="rounded-2xl border border-line bg-surface p-6 text-center text-sm text-muted">
           {tab === "unread" ? "כל העדכונים הרלוונטיים אליכם נקראו." : "אין עדכונים להצגה."}
         </p>
@@ -158,6 +205,17 @@ export default function UpdatesList({ items }: { items: UpdateItem[] }) {
             );
           })}
         </ul>
+      )}
+
+      {cursor && (
+        <button
+          type="button"
+          onClick={loadMore}
+          disabled={loadingMore}
+          className="self-center rounded-full border border-line bg-surface px-5 py-2 text-sm font-bold text-muted hover:bg-bg disabled:opacity-60"
+        >
+          {loadingMore ? "טוען…" : "טען עוד"}
+        </button>
       )}
     </div>
   );

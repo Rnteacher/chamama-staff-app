@@ -200,3 +200,23 @@ export interface EmploymentOverviewData {
   }[];
   can_manage: boolean;
 }
+
+/** The student already has employment records (a placement or logged hours). */
+export function hasEmploymentHistory(data: EmploymentOverviewData): boolean {
+  return (
+    data.placement != null ||
+    (data.total_minutes ?? 0) > 0 ||
+    (data.recent_logs?.length ?? 0) > 0
+  );
+}
+
+/**
+ * Whether employment applies to the student at all — drives whether the
+ * student page shows an Employment section, for EVERY viewer: effectively
+ * eligible (canonical student_employment_eligible: explicit override, else
+ * the cohort default) or existing records that must stay reachable.
+ * Uses the database's effective decision only — never cohort names.
+ */
+export function employmentApplies(data: EmploymentOverviewData): boolean {
+  return data.eligible === true || hasEmploymentHistory(data);
+}

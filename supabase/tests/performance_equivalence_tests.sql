@@ -9,6 +9,11 @@
 -- reference implementations) for every staff account, over a message set
 -- that covers every visibility-flag combination for every student.
 --
+-- Migration 20260923000006 then INTENTIONALLY changed one semantic so the
+-- unread badge equals /updates "לא נקראו": soft-deleted messages are no
+-- longer counted as unread. The unread reference carries exactly that change
+-- (marked "000006") and nothing else; staff_message_updates() is unchanged.
+--
 -- Every test runs in its own transaction and rolls back.
 -- Output: "PASS:" / "FAIL:" lines. A clean run has no FAILs.
 -- ============================================================================
@@ -21,6 +26,7 @@
 begin;
 
 -- reference: student_unread_counts as deployed before 20260923000004
+-- (+ 000006: soft-deleted messages are not unread updates)
 create function pg_temp.ref_unread()
 returns table (student_id uuid, unread_count bigint)
 language sql stable as $$
@@ -28,6 +34,7 @@ language sql stable as $$
   select m.student_id, count(*)::bigint as unread_count
     from public.student_messages m, me
    where me.sid is not null
+     and m.deleted_at is null -- 000006
      and not exists (
            select 1 from public.message_reads r
             where r.staff_id = me.sid and r.message_id = m.id

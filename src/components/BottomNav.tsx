@@ -49,18 +49,24 @@ export default function BottomNav({
                   active ? "text-ink" : "text-muted"
                 }`}
               >
-                <item.icon active={active} />
+                {/* the badge is anchored to the ICON (not the whole cell), so
+                    it stays on the icon's upper corner at every width; its
+                    right edge is pinned, so 2+ digits grow away from the icon */}
+                <span className="relative inline-flex" data-nav-icon={item.href}>
+                  <item.icon active={active} />
+                  {badge && (
+                    <span
+                      aria-label={`${totalUnread} עדכונים שלא נקראו`}
+                      data-unread-badge=""
+                      className="absolute -top-1.5 right-[calc(100%-0.625rem)] grid h-5 min-w-5 place-items-center rounded-full bg-brand px-1 text-[10px] font-extrabold leading-none text-ink"
+                    >
+                      {totalUnread > 99 ? "99+" : totalUnread}
+                    </span>
+                  )}
+                </span>
                 <span className={active ? "font-bold" : undefined}>
                   {item.label}
                 </span>
-                {badge && (
-                  <span
-                    aria-label={`${totalUnread} עדכונים שלא נקראו`}
-                    className="absolute top-1 left-4 grid h-5 min-w-5 place-items-center rounded-full bg-brand px-1 text-[10px] font-extrabold text-ink"
-                  >
-                    {totalUnread > 99 ? "99+" : totalUnread}
-                  </span>
-                )}
                 {active && (
                   <span
                     aria-hidden="true"

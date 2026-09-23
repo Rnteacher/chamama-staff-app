@@ -12,7 +12,8 @@ import Composer from "@/components/Composer";
 import MarkAllReadButton from "@/components/MarkStudentReadButton";
 import EmptyState from "@/components/EmptyState";
 import StudentEmploymentCard from "@/components/employment/StudentEmploymentCard";
-import type { EmploymentOverviewData } from "@/lib/employment";
+import AddToEmploymentButton from "@/components/employment/AddToEmploymentButton";
+import { employmentApplies, type EmploymentOverviewData } from "@/lib/employment";
 import StudentDayPlanForm from "@/components/attendance/StudentDayPlanForm";
 import { hasRole } from "@/lib/auth";
 import { jerusalemParts } from "@/lib/meetings";
@@ -153,6 +154,14 @@ export default async function StudentPage({
     author_staff_id: r.author_staff_id ?? null,
   }));
 
+  const employment = (employmentRes.data ?? null) as unknown as EmploymentOverviewData | null;
+  // employment managers (never in View-As) may change the override
+  const canManageEmployment =
+    !viewAs.active &&
+    (hasRole(me, "employment_coordinator") ||
+      hasRole(me, "leadership") ||
+      hasRole(me, "super_admin"));
+
   return (
     /* Desktop: main column (feed + composer) beside a secondary column
        (summary + recurring meetings). Mobile: original single-column flow. */
@@ -186,6 +195,11 @@ export default async function StudentPage({
             <MarkAllReadButton studentId={student.id} label="סמן הכל כנקרא" />
           </div>
         )}
+        {/* employment does not apply yet (no section is shown): managers can
+            add the student — sets the existing force-eligible override */}
+        {canManageEmployment && employment && !employmentApplies(employment) && (
+          <AddToEmploymentButton studentId={student.id} />
+        )}
       </header>
 
       <div className="order-2 min-w-0 lg:col-start-2 lg:row-start-2 flex flex-col gap-4">
@@ -205,16 +219,13 @@ export default async function StudentPage({
               hasRole(me, "super_admin"))
           }
         />
-        <StudentEmploymentCard
-          data={(employmentRes.data ?? {}) as unknown as EmploymentOverviewData}
-          studentId={student.id}
-          canManageOverride={
-            !viewAs.active &&
-            (hasRole(me, "employment_coordinator") ||
-              hasRole(me, "leadership") ||
-              hasRole(me, "super_admin"))
-          }
-        />
+        {employment && (
+          <StudentEmploymentCard
+            data={employment}
+            studentId={student.id}
+            canManageOverride={canManageEmployment}
+          />
+        )}
         <StudentMeetingsPanel
           studentId={student.id}
           schedules={schedules}
