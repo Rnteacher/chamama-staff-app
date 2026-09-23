@@ -20,18 +20,21 @@ export async function subscribeToPushAction(
   if (!me.staffId) return { ok: false, error: "אין זהות צוות מקושרת" };
   const supabase = await createClient();
 
-  const { error } = await supabase.from("push_subscriptions").upsert(
+  // Saves this browser's subscription for the caller; if the same browser
+  // subscription is still registered to another staff member (previous
+  // sign-in on this device), ownership moves to the caller atomically.
+  const { data: status, error } = await supabase.rpc(
+    "claim_push_subscription",
     {
-      staff_id: me.staffId,
-      endpoint: parsed.data.endpoint,
-      p256dh: parsed.data.p256dh,
-      auth: parsed.data.auth,
-      user_agent: parsed.data.userAgent ?? null,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "endpoint" }
+      p_endpoint: parsed.data.endpoint,
+      p_p256dh: parsed.data.p256dh,
+      p_auth: parsed.data.auth,
+      p_user_agent: parsed.data.userAgent ?? null,
+    }
   );
-  if (error) return { ok: false, error: "שמירת המנוי נכשלה" };
+  if (error || (status !== "ok" && status !== "transferred")) {
+    return { ok: false, error: "שמירת המנוי נכשלה" };
+  }
   return { ok: true };
 }
 

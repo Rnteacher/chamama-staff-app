@@ -3,12 +3,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  subscribeToPushAction,
   unsubscribeFromPushAction,
   sendTestPushAction,
 } from "@/lib/actions/push";
 import {
   ensurePushSubscription,
+  refreshPushSubscription,
 } from "@/components/PushBanner";
 
 type Status =
@@ -19,7 +19,11 @@ type Status =
   | "not-subscribed"
   | "subscribed";
 
-export default function PushManager() {
+export default function PushManager({
+  staffId,
+}: {
+  staffId: string | null;
+}) {
   const router = useRouter();
   const [status, setStatus] = useState<Status>("loading");
   const [busy, setBusy] = useState(false);
@@ -44,13 +48,7 @@ export default function PushManager() {
         const sub = await registration.pushManager.getSubscription();
         if (sub) {
           // keep the server record fresh
-          const json = sub.toJSON();
-          await subscribeToPushAction({
-            endpoint: sub.endpoint,
-            p256dh: json.keys!.p256dh!,
-            auth: json.keys!.auth!,
-            userAgent: navigator.userAgent.slice(0, 300),
-          });
+          await refreshPushSubscription(sub, staffId);
           setStatus("subscribed");
         } else {
           setStatus("not-subscribed");
@@ -58,7 +56,7 @@ export default function PushManager() {
       })().catch(() => setStatus("unsupported"));
     }, 0);
     return () => clearTimeout(check);
-  }, []);
+  }, [staffId]);
 
   async function subscribe() {
     setBusy(true);
@@ -69,7 +67,7 @@ export default function PushManager() {
         setStatus(permission === "denied" ? "denied" : "not-subscribed");
         return;
       }
-      await ensurePushSubscription();
+      await ensurePushSubscription(staffId);
       setStatus("subscribed");
       router.refresh();
     } catch {

@@ -134,7 +134,7 @@ export default async function AppLayout({
         {children}
       </main>
 
-      <PushBanner />
+      <PushBanner staffId={me.staffId} />
       <BottomNav totalUnread={totalUnread} showCalendar={isCalendarAdmin} />
     </div>
   );

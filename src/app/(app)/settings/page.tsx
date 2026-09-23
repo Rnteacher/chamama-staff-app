@@ -70,7 +70,7 @@ export default async function SettingsPage() {
 
       <section aria-labelledby="notif-heading" className="flex flex-col gap-3">
         <h2 id="notif-heading" className="font-extrabold">התראות</h2>
-        <PushManager />
+        <PushManager staffId={me.staffId} />
       </section>
 
       <InstallHint />
