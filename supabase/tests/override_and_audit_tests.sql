@@ -70,7 +70,8 @@ do $$ begin
 end $$;
 
 -- ============================================================================
--- OV2: effective eligibility precedence (override > cohort default)
+-- OV2: effective eligibility (000008): older cohorts ALWAYS eligible (a
+--      legacy force-ineligible row is ignored); youngest only when added
 -- ============================================================================
 begin;
 do $$ begin
@@ -90,24 +91,31 @@ do $$ begin
     raise exception 'FAIL: forced-eligible youngest must be eligible';
   end if;
 
-  -- force ineligible an older-cohort student → not eligible
+  -- a LEGACY force-ineligible row on an older-cohort student is ignored
   insert into public.student_employment_overrides (student_id, override)
   values ('44444444-4444-4444-4444-444444444401', 'ineligible');
-  if public.student_employment_eligible('44444444-4444-4444-4444-444444444401') then
-    raise exception 'FAIL: forced-ineligible older student must not be eligible';
+  if not public.student_employment_eligible('44444444-4444-4444-4444-444444444401') then
+    raise exception 'FAIL: legacy force-ineligible must not make an older student ineligible';
+  end if;
+  -- ...and on a youngest-cohort student it equals the default (not eligible)
+  insert into public.student_employment_overrides (student_id, override)
+  values ('44444444-4444-4444-4444-444444444406', 'ineligible');
+  if public.student_employment_eligible('44444444-4444-4444-4444-444444444406') then
+    raise exception 'FAIL: legacy force-ineligible youngest must stay not eligible';
   end if;
 
   -- reset to automatic → cohort behavior restored
   delete from public.student_employment_overrides
    where student_id in ('44444444-4444-4444-4444-444444444401',
-                        '44444444-4444-4444-4444-444444444405');
+                        '44444444-4444-4444-4444-444444444405',
+                        '44444444-4444-4444-4444-444444444406');
   if public.student_employment_eligible('44444444-4444-4444-4444-444444444405') then
     raise exception 'FAIL: after reset, youngest must be auto-ineligible again';
   end if;
   if not public.student_employment_eligible('44444444-4444-4444-4444-444444444401') then
     raise exception 'FAIL: after reset, older cohort must be eligible again';
   end if;
-  raise notice 'PASS: override precedence + reset to automatic (eligible youngest / ineligible older)';
+  raise notice 'PASS: youngest only when added; older always eligible (legacy deny ignored); reset restores default';
 end $$;
 rollback;
 
@@ -133,7 +141,12 @@ do $$ begin
     v_noam  uuid := '44444444-4444-4444-4444-444444444401';
     v_count int;
   begin
-    perform public.admin_set_employment_override(v_noam, 'ineligible');
+    -- force-ineligible is no longer a manual decision: refused, nothing written
+    begin
+      perform public.admin_set_employment_override(v_noam, 'ineligible');
+      raise exception 'FAIL: force-ineligible accepted';
+    exception when invalid_parameter_value then null; end;
+    perform public.admin_set_employment_override(v_noam, 'eligible');
     perform public.admin_set_employment_override(v_noam, 'eligible');
     perform public.admin_set_employment_override(v_noam, 'automatic');
     -- exactly one audit per decision, with prev→next metadata
@@ -147,7 +160,7 @@ do $$ begin
     if not exists (
       select 1 from public.audit_logs
        where action = 'employment_override_changed' and entity_id = v_noam
-         and metadata->>'from' = 'ineligible' and metadata->>'to' = 'eligible'
+         and metadata->>'from' = 'eligible' and metadata->>'to' = 'eligible'
     ) then
       raise exception 'FAIL: override change audit lacks prev→next metadata';
     end if;
@@ -155,7 +168,7 @@ do $$ begin
     if exists (select 1 from public.student_employment_overrides where student_id = v_noam) then
       raise exception 'FAIL: reset to automatic must remove the override row';
     end if;
-    raise notice 'PASS: employment coordinator sets/changes/resets override + audited';
+    raise notice 'PASS: employment coordinator adds/re-adds/resets (audited); force-ineligible refused';
   end;
 end $$;
 rollback;
@@ -189,11 +202,13 @@ do $$ begin
       raise exception 'FAIL: forced-eligible youngest must appear in the admin list';
     end if;
 
-    -- force-ineligible an older student → disappears
-    perform public.admin_set_employment_override(
-      '44444444-4444-4444-4444-444444444401', 'ineligible');
-    if exists (select 1 from public.employment_admin_rows() where student_name like 'נועם%') then
-      raise exception 'FAIL: forced-ineligible student must disappear from the admin list';
+    -- a LEGACY force-ineligible row on an older student → still listed
+    perform set_config('role', 'postgres', true);
+    insert into public.student_employment_overrides (student_id, override)
+    values ('44444444-4444-4444-4444-444444444401', 'ineligible');
+    perform _oa_as('itay@chamama.example');
+    if not exists (select 1 from public.employment_admin_rows() where student_name like 'נועם%') then
+      raise exception 'FAIL: legacy force-ineligible older student must stay in the admin list';
     end if;
     raise notice 'PASS: employment_admin_rows lists only effectively-eligible students';
   end;
@@ -201,19 +216,33 @@ end $$;
 rollback;
 
 -- ============================================================================
--- OV5: placement creation keeps the canonical rule (forced-ineligible blocked)
+-- OV5: placement creation follows the canonical rule: youngest default is
+--      blocked; an older student with a legacy force-ineligible row is NOT
 -- ============================================================================
 begin;
 select _oa_as('itay@chamama.example');
 do $$ begin
-  declare v_noam uuid := '44444444-4444-4444-4444-444444444401';
+  declare
+    v_omer  uuid := '44444444-4444-4444-4444-444444444403'; -- older, no placement
+    v_shahar uuid := '44444444-4444-4444-4444-444444444406'; -- youngest, default
   begin
-    perform public.admin_set_employment_override(v_noam, 'ineligible');
+    perform set_config('role', 'postgres', true);
+    insert into public.student_employment_overrides (student_id, override)
+    values (v_omer, 'ineligible');
+    perform _oa_as('itay@chamama.example');
+    perform public.admin_upsert_employment_placement(
+      null, v_omer, 'מקום בדיקה', null, null,
+      current_date, null, null, '[]'::jsonb);
+    perform set_config('role', 'postgres', true);
+    if not exists (select 1 from public.student_employment_placements where student_id = v_omer) then
+      raise exception 'FAIL: older student with legacy force-ineligible could not be placed';
+    end if;
+    perform _oa_as('itay@chamama.example');
     begin
       perform public.admin_upsert_employment_placement(
-        null, v_noam, 'מקום בדיקה', null, null,
+        null, v_shahar, 'מקום בדיקה', null, null,
         current_date, null, null, '[]'::jsonb);
-      raise exception 'FAIL: placement created for forced-ineligible student';
+      raise exception 'FAIL: placement created for a youngest-cohort (not added) student';
     exception when others then
       if sqlerrm like '%לשבץ%' or sqlerrm like '%eligible%' or sqlerrm like '%Not authorized%' then
         null; -- expected: the canonical rule rejected the placement
@@ -221,7 +250,7 @@ do $$ begin
         raise;
       end if;
     end;
-    raise notice 'PASS: forced-ineligible student cannot receive a new placement';
+    raise notice 'PASS: placement: legacy deny ignored for older; youngest default still blocked';
   end;
 end $$;
 rollback;

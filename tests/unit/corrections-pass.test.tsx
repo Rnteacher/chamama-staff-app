@@ -192,45 +192,39 @@ describe("terminology: קבוצה (not קבוצת אם), צוות (not סגל)",
 
 // ================================================ EMPLOYMENT OVERRIDE =======
 describe("employment eligibility tri-state override", () => {
-  it("effective eligibility precedence: override first, cohort default second", async () => {
+  it("effective eligibility: older cohorts always; youngest only when added", async () => {
     const { effectiveEmploymentEligibility } = await import("@/lib/employment");
-    // force eligible wins even for the youngest cohort
+    // an explicit add makes the youngest cohort eligible
     expect(effectiveEmploymentEligibility(false, "eligible")).toBe(true);
-    // force ineligible wins even for older cohorts
-    expect(effectiveEmploymentEligibility(true, "ineligible")).toBe(false);
-    // automatic restores the cohort default
+    // a legacy force-ineligible NEVER hides an older cohort
+    expect(effectiveEmploymentEligibility(true, "ineligible")).toBe(true);
+    // ...and changes nothing for the youngest (default = not eligible)
+    expect(effectiveEmploymentEligibility(false, "ineligible")).toBe(false);
     expect(effectiveEmploymentEligibility(true, "automatic")).toBe(true);
     expect(effectiveEmploymentEligibility(false, "automatic")).toBe(false);
   });
 
-  it("override labels are tri-state Hebrew (never a boolean)", async () => {
-    const { EMPLOYMENT_OVERRIDE_LABELS } = await import("@/lib/employment");
-    expect(EMPLOYMENT_OVERRIDE_LABELS.automatic).toBe("ברירת מחדל");
-    expect(EMPLOYMENT_OVERRIDE_LABELS.eligible).toBe("לאפשר תעסוקה");
-    expect(EMPLOYMENT_OVERRIDE_LABELS.ineligible).toBe("לא לאפשר תעסוקה");
-  });
-
-  it("the DB function applies the override before the cohort rule", () => {
-    const mig = migration("20260923000002_employment_override_and_audit_pagination.sql");
+  it("the DB function decides older cohorts BEFORE looking at any override", () => {
+    const mig = migration("20260923000008_employment_older_cohorts_always_eligible.sql");
     const fn = mig.slice(
       mig.indexOf("create or replace function public.student_employment_eligible"),
       mig.indexOf("create or replace function public.admin_set_employment_override")
     );
-    const overrideIdx = fn.indexOf("student_employment_overrides");
-    const cohortIdx = fn.indexOf("hebrew_cohort_rank");
-    expect(overrideIdx).toBeGreaterThan(-1);
-    expect(cohortIdx).toBeGreaterThan(overrideIdx); // override checked FIRST
+    const olderIdx = fn.indexOf("if v_rank is not null and v_rank < v_max_rank then");
+    const overrideIdx = fn.indexOf("from public.student_employment_overrides");
+    expect(olderIdx).toBeGreaterThan(-1);
+    expect(overrideIdx).toBeGreaterThan(olderIdx); // older cohorts short-circuit
+    expect(fn).toContain("return coalesce(v_override = 'eligible', false);");
+    expect(fn).not.toContain("= 'ineligible'");
   });
 
-  it("set/clear RPC authorizes employment managers and audits the change", () => {
-    const mig = migration("20260923000002_employment_override_and_audit_pagination.sql");
-    const fn = mig.slice(
-      mig.indexOf("create or replace function public.admin_set_employment_override"),
-      mig.indexOf("employment_admin_rows — RECREATED")
-    );
+  it("set/clear RPC authorizes employment managers, audits, and refuses force-ineligible", () => {
+    const mig = migration("20260923000008_employment_older_cohorts_always_eligible.sql");
+    const fn = mig.slice(mig.indexOf("create or replace function public.admin_set_employment_override"));
     expect(fn).toContain("staff_can_manage_employment");
     expect(fn).toContain("insert into public.audit_logs");
-    expect(fn).toMatch(/'eligible', 'ineligible', 'automatic'/);
+    expect(fn).toContain("p_override not in ('eligible', 'automatic')");
+    expect(src("lib/actions/employment.ts")).toContain('["eligible", "automatic"].includes(override)');
   });
 
   it("employment admin lists only effectively-eligible students (no זכאות column)", () => {
@@ -247,14 +241,13 @@ describe("employment eligibility tri-state override", () => {
     expect(table).not.toContain("זכאי/ת");
   });
 
-  it("the student page hosts the override control (managers only, View-As blocked)", () => {
+  it("the student page has no allow/deny control; only managers get the add action (View-As blocked)", () => {
     const studentPage = src("app/(app)/students/[id]/page.tsx");
-    expect(studentPage).toContain("canManageOverride");
+    expect(studentPage).not.toContain("canManageOverride");
+    expect(studentPage).not.toContain("EmploymentOverrideControl");
     expect(studentPage).toMatch(/employment_coordinator/);
     expect(studentPage).toMatch(/!viewAs\.active/);
-    const control = src("components/employment/EmploymentOverrideControl.tsx");
-    expect(control).toContain("setEmploymentOverrideAction");
-    expect(control).toContain("EMPLOYMENT_OVERRIDE_LABELS");
+    expect(studentPage).toContain("<AddToEmploymentButton");
   });
 
   it("placement creation keeps rejecting ineligible students through the canonical rule", () => {

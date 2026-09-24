@@ -67,22 +67,40 @@ export default async function HomePage() {
     supabase.from("majors").select("id, name"),
     supabase.rpc("learning_groups_on_weekday", { p_weekday: jp.weekday }),
   ]);
-  const [me, viewAs] = await Promise.all([requireMe(), getViewAsState()]);
+  // the caller's own major-head students (canonical major_heads relationship,
+  // keyed on the session in the database — roles grant nothing here)
+  const majorIdsP = supabase.rpc("home_major_student_ids");
+  const [me, viewAs, majorIdsRes] = await Promise.all([
+    requireMe(),
+    getViewAsState(),
+    majorIdsP,
+  ]);
 
   // when View-As is active, use the target staff + context for scoping
   const useViewAs = Boolean(viewAs.active && viewAs.staffId && viewAs.roleContext);
 
   // canonical relationships decide the Home student lists (NEVER the role
   // list): the real user's group_mentors / master_assignments arrive with
-  // the identity (current_staff_context). View-As never renders these lists.
+  // the identity (current_staff_context), major_heads via
+  // home_major_student_ids. View-As never renders these lists.
   const mentoredGroupIds = new Set(useViewAs ? [] : me.mentorGroupIds);
   const masteredStudentIds = new Set(useViewAs ? [] : me.masterStudentIds);
+  if (majorIdsRes.error) {
+    console.error("[home] home_major_student_ids unavailable:", majorIdsRes.error.message);
+  }
+  const majorHeadStudentIds = new Set(
+    useViewAs
+      ? []
+      : ((majorIdsRes.data ?? []) as { student_id: string }[]).map((r) => r.student_id)
+  );
 
-  // The relationship dashboard is only DISPLAYED for mentor/master rows (or
-  // the View-As role table) — skip the RPC for everyone else.
+  // The relationship dashboard is only DISPLAYED for mentor/master/major rows
+  // (or the View-As role table) — skip the RPC for everyone else.
   const needsDashboard = useViewAs
     ? viewAs.roleContext !== "staff"
-    : mentoredGroupIds.size > 0 || masteredStudentIds.size > 0;
+    : mentoredGroupIds.size > 0 ||
+      masteredStudentIds.size > 0 ||
+      majorHeadStudentIds.size > 0;
 
   // ---- wave 2: everything keyed by the resolved staff member, in parallel
   const scheduleStaffId = useViewAs ? viewAs.staffId! : me.staffId;
@@ -217,9 +235,14 @@ export default async function HomePage() {
   const functionalRoles = me.roles.filter((r) => r !== "staff");
   const roleChips = functionalRoles.map((r) => ROLE_LABELS[r]).join(" · ");
 
-  // relationship-scoped student lists (mentor / master)
+  // relationship-scoped student lists (mentor / master / major head)
   const dashRows = ((dashRes.data ?? []) as DashboardRow[]);
-  const scoped = scopeHomeStudents(dashRows, mentoredStudentIds, masteredStudentIds);
+  const scoped = scopeHomeStudents(
+    dashRows,
+    mentoredStudentIds,
+    masteredStudentIds,
+    majorHeadStudentIds
+  );
   const toMobile = (rows: DashboardRow[]) =>
     rows
       .map((r) => {
@@ -403,13 +426,15 @@ export default async function HomePage() {
         )}
       </section>
 
-      {/* ------------------------- החניכים שלי (mentor / master only) ----- */}
+      {/* ---------------- החניכים שלי (mentor / master / major head only) -- */}
       {!useViewAs && (
         <HomeStudentsPanel
           mentorRows={scoped.mentorRows}
           masterRows={scoped.masterRows}
+          majorRows={scoped.majorRows}
           mentorMobile={toMobile(scoped.mentorRows)}
           masterMobile={toMobile(scoped.masterRows)}
+          majorMobile={toMobile(scoped.majorRows)}
         />
       )}
 

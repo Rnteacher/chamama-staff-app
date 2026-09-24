@@ -155,7 +155,8 @@ export default async function StudentPage({
   }));
 
   const employment = (employmentRes.data ?? null) as unknown as EmploymentOverviewData | null;
-  // employment managers (never in View-As) may change the override
+  // employment managers (never in View-As) may add a student whom
+  // employment does not apply to yet
   const canManageEmployment =
     !viewAs.active &&
     (hasRole(me, "employment_coordinator") ||
@@ -220,11 +221,7 @@ export default async function StudentPage({
           }
         />
         {employment && (
-          <StudentEmploymentCard
-            data={employment}
-            studentId={student.id}
-            canManageOverride={canManageEmployment}
-          />
+          <StudentEmploymentCard data={employment} studentId={student.id} />
         )}
         <StudentMeetingsPanel
           studentId={student.id}

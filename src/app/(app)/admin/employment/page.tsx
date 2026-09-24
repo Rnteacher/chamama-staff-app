@@ -18,9 +18,9 @@ export default async function EmploymentAdminPage() {
   if (!allowed) redirect("/?error=אין%20הרשאה%20לניהול%20תעסוקה");
   const supabase = await createClient();
 
-  // Eligibility is canonical SQL (effective = override if present, otherwise
-  // the cohort default): employment_admin_rows lists ONLY effectively-eligible
-  // students — the auto-ineligible youngest cohort never reaches this screen.
+  // Eligibility is canonical SQL (older cohorts always; the youngest cohort
+  // only when explicitly added): employment_admin_rows lists ONLY eligible
+  // students — the youngest cohort reaches this screen only once added.
   const [rowsRes, groupsRes, cohortRes] = await Promise.all([
     supabase.rpc("employment_admin_rows"),
     supabase.from("greenhouse_groups").select("id, name").order("name"),

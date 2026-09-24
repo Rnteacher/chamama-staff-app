@@ -16,33 +16,26 @@
 export const EMPLOYMENT_TARGET_MINUTES = 12_000; // 200 שעות
 
 /**
- * Manual per-student eligibility override (tri-state — canonical SQL:
- * student_employment_overrides + student_employment_eligible, migration
- * 20260923000002). A missing row means "automatic": the cohort default.
- * "automatic" is deliberately distinct from an explicit allow/deny.
+ * Per-student override row (canonical SQL: student_employment_overrides).
+ * Since migration 20260923000008 the only meaningful value is "eligible" —
+ * an explicit ADD for the youngest cohort. "ineligible" can only exist as a
+ * legacy row and is ignored; a missing row means "automatic".
  */
 export type EmploymentOverride = "eligible" | "ineligible";
 export type EmploymentOverrideState = EmploymentOverride | "automatic";
 
-export const EMPLOYMENT_OVERRIDE_LABELS: Record<EmploymentOverrideState, string> = {
-  automatic: "ברירת מחדל",
-  eligible: "לאפשר תעסוקה",
-  ineligible: "לא לאפשר תעסוקה",
-};
-
 /**
- * Canonical effective eligibility precedence (mirrors
- * public.student_employment_eligible): 1. explicit override if present,
- * 2. otherwise the Hebrew-cohort default. Never re-derive this in React —
- * this mirror exists for validation and unit tests only.
+ * Canonical effective eligibility (mirrors public.student_employment_eligible,
+ * migration 20260923000008): every older cohort is eligible automatically —
+ * no manual deny, a legacy "ineligible" row is ignored; the youngest cohort
+ * only when explicitly added. Never re-derive this in React — this mirror
+ * exists for validation and unit tests only.
  */
 export function effectiveEmploymentEligibility(
   cohortEligible: boolean,
   override: EmploymentOverrideState
 ): boolean {
-  if (override === "eligible") return true;
-  if (override === "ineligible") return false;
-  return cohortEligible;
+  return cohortEligible || override === "eligible";
 }
 
 /**

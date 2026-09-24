@@ -6,14 +6,14 @@ import {
   formatWorkSlotsHe,
   type EmploymentOverviewData,
 } from "@/lib/employment";
-import EmploymentOverrideControl from "@/components/employment/EmploymentOverrideControl";
 
 /**
  * Employment summary on the student page: workplace, planned work days,
  * accumulated hours toward the 200h target and recent work logs.
  * Contact details are NOT rendered here (kept off broad surfaces).
- * Authorized employment managers also get the tri-state eligibility
- * override here — eligibility is operational logic, not a label.
+ *
+ * Informational only: no eligibility controls or explanations. Placement and
+ * details are managed in the Employment Management area.
  *
  * When employment does not apply to the student (effectively ineligible and
  * no existing records) the section is not rendered at all — for every
@@ -22,11 +22,9 @@ import EmploymentOverrideControl from "@/components/employment/EmploymentOverrid
 export default function StudentEmploymentCard({
   data,
   studentId,
-  canManageOverride = false,
 }: {
   data: EmploymentOverviewData;
   studentId: string;
-  canManageOverride?: boolean;
 }) {
   if (!employmentApplies(data)) return null;
   const p = computeEmploymentProgress(data.total_minutes);
@@ -44,18 +42,6 @@ export default function StudentEmploymentCard({
           </Link>
         )}
       </div>
-
-      {canManageOverride && (
-        <EmploymentOverrideControl
-          studentId={studentId}
-          override={data.override ?? "automatic"}
-        />
-      )}
-
-      {!data.eligible && (
-        // existing records stay reachable after eligibility was withdrawn
-        <p className="mt-2 text-sm text-muted">לא משתתף/ת כרגע בתוכנית התעסוקה.</p>
-      )}
 
       {!data.placement ? (
         <p className="mt-2 text-sm text-muted">אין שיבוץ לעבודה.</p>

@@ -17,7 +17,7 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/",
   useRouter: () => ({ refresh: () => undefined }),
 }));
-// the override control's server action is not exercised by render tests
+// the add action's server action is not exercised by render tests
 vi.mock("@/lib/actions/employment", () => ({
   setEmploymentOverrideAction: async () => ({ ok: true }),
 }));
@@ -173,8 +173,11 @@ describe("employment section visibility (student page)", () => {
     expect(employmentApplies({ ...base, eligible: true, cohort_note: null })).toBe(true);
   });
 
-  it("older cohort + force ineligible (no records) → hidden", () => {
-    expect(employmentApplies({ ...base, override: "ineligible", cohort_note: null })).toBe(false);
+  it("older cohort + legacy force ineligible → canonical eligible=true → shown", () => {
+    // the database reports eligible=true for every older cohort (000008)
+    expect(
+      employmentApplies({ ...base, eligible: true, override: "ineligible", cohort_note: null })
+    ).toBe(true);
   });
 
   it("existing placement / hours stay reachable even when not eligible", () => {
@@ -186,7 +189,6 @@ describe("employment section visibility (student page)", () => {
   it("renders NOTHING for a default-ineligible student — for staff AND for managers", async () => {
     const Card = (await import("@/components/employment/StudentEmploymentCard")).default;
     expect(renderToStaticMarkup(<Card data={base} studentId="s1" />)).toBe("");
-    expect(renderToStaticMarkup(<Card data={base} studentId="s1" canManageOverride />)).toBe("");
   });
 
   it("managers add the student from OUTSIDE the card (force-eligible override)", async () => {

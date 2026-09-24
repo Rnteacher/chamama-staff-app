@@ -55,10 +55,10 @@ function revalidateEmployment(studentId?: string | null) {
 // ------------------------------------------------------------- overrides ---
 
 /**
- * Tri-state employment-eligibility override ('eligible' | 'ineligible' |
- * 'automatic'). The canonical decision + audit live INSIDE
- * admin_set_employment_override; this action only pre-checks the caller and
- * View-As.
+ * Employment add / clear ('eligible' | 'automatic'). There is no manual deny:
+ * older cohorts are always eligible (canonical student_employment_eligible).
+ * The canonical decision + audit live INSIDE admin_set_employment_override;
+ * this action only pre-checks the caller and View-As.
  */
 export async function setEmploymentOverrideAction(
   _prev: ActionState | null,
@@ -72,7 +72,7 @@ export async function setEmploymentOverrideAction(
     const studentId = String(fd.get("studentId") ?? "");
     const override = String(fd.get("override") ?? "");
     if (!isUuid(studentId)) return { ok: false, error: "קלט לא תקין" };
-    if (!["eligible", "ineligible", "automatic"].includes(override)) {
+    if (!["eligible", "automatic"].includes(override)) {
       return { ok: false, error: "קלט לא תקין" };
     }
 
